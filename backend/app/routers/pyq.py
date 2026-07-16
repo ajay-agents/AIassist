@@ -1,10 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.config import settings
 from app.schemas import ClassifiedQuestion, PyqRequest, PyqResponse
 from app.services.frequency import compute_frequencies
-from app.services.gemini_client import get_gemini_client
+from app.services.llm_client import generate_structured
 
 router = APIRouter()
 
@@ -47,13 +46,11 @@ def _build_insight_prompt(request: PyqRequest, high_yield_topics: list[str]) -> 
 @router.post("/analyze-pyqs", response_model=PyqResponse)
 def analyze_pyqs(request: PyqRequest) -> PyqResponse:
     try:
-        classification = get_gemini_client().generate_structured(
-            model=settings.gemini_flash_model,
-            prompt=_build_classification_prompt(request),
-            response_schema=_PyqClassification,
+        classification = generate_structured(
+            model_tier="flash", prompt=_build_classification_prompt(request), response_schema=_PyqClassification
         )
     except Exception as exc:  # noqa: BLE001 — surface as a clean API error
-        raise HTTPException(status_code=502, detail=f"Gemini classification failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"PYQ classification failed: {exc}") from exc
 
     questions = classification["questions"] if isinstance(classification, dict) else classification.questions
 
@@ -63,8 +60,8 @@ def analyze_pyqs(request: PyqRequest) -> PyqResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
-        insight = get_gemini_client().generate_structured(
-            model=settings.gemini_flash_model,
+        insight = generate_structured(
+            model_tier="flash",
             prompt=_build_insight_prompt(request, high_yield_topics),
             response_schema=_StrategyInsight,
         )

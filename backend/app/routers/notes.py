@@ -1,8 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
-from app.config import settings
 from app.schemas import NotesRequest, NotesResponse
-from app.services.gemini_client import get_gemini_client
+from app.services.llm_client import generate_structured
 
 router = APIRouter()
 
@@ -50,13 +49,11 @@ def summarize_notes(request: NotesRequest) -> NotesResponse:
 
     for chunk in chunks:
         try:
-            result = get_gemini_client().generate_structured(
-                model=settings.gemini_flash_model,
-                prompt=_build_prompt(request, chunk),
-                response_schema=NotesResponse,
+            result = generate_structured(
+                model_tier="flash", prompt=_build_prompt(request, chunk), response_schema=NotesResponse
             )
         except Exception as exc:  # noqa: BLE001 — surface as a clean API error
-            raise HTTPException(status_code=502, detail=f"Gemini summarization failed: {exc}") from exc
+            raise HTTPException(status_code=502, detail=f"Notes summarization failed: {exc}") from exc
 
         summary_markdown = result["summary_markdown"] if isinstance(result, dict) else result.summary_markdown
         chunk_terms = result["key_terms"] if isinstance(result, dict) else result.key_terms

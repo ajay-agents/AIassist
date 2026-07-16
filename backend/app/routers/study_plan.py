@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.config import settings
 from app.schemas import LearningUnit, StudyPlanRequest, StudyPlanResponse
-from app.services.gemini_client import get_gemini_client
+from app.services.llm_client import generate_structured
 from app.services.scheduler import build_schedule
 
 router = APIRouter()
@@ -41,13 +40,9 @@ def generate_study_plan(request: StudyPlanRequest) -> StudyPlanResponse:
     prompt = _build_prompt(request)
 
     try:
-        breakdown = get_gemini_client().generate_structured(
-            model=settings.gemini_flash_model,
-            prompt=prompt,
-            response_schema=_PlanBreakdown,
-        )
+        breakdown = generate_structured(model_tier="flash", prompt=prompt, response_schema=_PlanBreakdown)
     except Exception as exc:  # noqa: BLE001 — surface as a clean API error
-        raise HTTPException(status_code=502, detail=f"Gemini breakdown failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Study plan breakdown failed: {exc}") from exc
 
     units = breakdown["units"] if isinstance(breakdown, dict) else breakdown.units
     summary = breakdown["summary"] if isinstance(breakdown, dict) else breakdown.summary

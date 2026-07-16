@@ -33,8 +33,16 @@ to the model.** Every deterministic computation lives in
 |---|---|---|
 | Frontend | React (Vite) | Forms + results for the three tools; talks to the backend only |
 | Backend | FastAPI (Python) | Validation, orchestration, deterministic computation |
-| LLM layer | Gemini API (`google-genai`) | Content understanding, classification, generation |
+| LLM layer | Gemini API (`google-genai`), Groq as fallback | Content understanding, classification, generation |
 | Deterministic layer | Plain Python | Scheduling math and frequency tallying — never the model |
+
+**Fallback:** every router calls `app/services/llm_client.py`, which tries
+Gemini first (including Gemini's own bounded retry-with-backoff) and only
+falls back to Groq if Gemini fails outright. Groq has no native
+`response_schema`, so its schema is embedded in the prompt and JSON mode
+forces valid syntax; pydantic then validates the shape, giving callers the
+same contract regardless of which provider answered. If both providers
+fail, the caller gets one clear error naming both failures.
 
 The frontend is not part of this repo yet (it's being repointed from an
 existing prototype at a later step). This repo currently holds the backend.
@@ -52,13 +60,16 @@ backend/
       pyq.py                POST /analyze-pyqs
       notes.py              POST /summarize-notes
     services/
+      llm_client.py          Provider fallback: Gemini first, Groq if it fails
       gemini_client.py     google-genai wrapper: structured output, safety
                             settings, timeout + bounded retry-with-backoff
+      groq_client.py         Groq fallback wrapper: JSON mode + schema validation
       scheduler.py          Deterministic day-by-day scheduling (Study Plan)
       frequency.py           Deterministic topic/type frequency tallying (PYQ)
   tests/
     test_scheduler.py       Unit tests for scheduling arithmetic
     test_frequency.py        Unit tests for frequency arithmetic
+    test_llm_client.py        Unit tests for the Gemini→Groq fallback logic
 requirements.txt
 .env.example
 ```
@@ -72,7 +83,10 @@ pip install -r requirements.txt
 copy .env.example .env            # then fill in GEMINI_API_KEY
 ```
 
-Get a Gemini API key at https://ai.google.dev/gemini-api/docs/api-key.
+Get a Gemini API key at https://ai.google.dev/gemini-api/docs/api-key, and
+(optionally, for the fallback) a Groq API key at https://console.groq.com/keys.
+The app works with only `GEMINI_API_KEY` set — Groq is only used if Gemini
+fails.
 
 ## Running the API
 
@@ -126,6 +140,9 @@ See `.env.example`:
 | `GEMINI_API_KEY` | Server-side only, never sent to the frontend |
 | `GEMINI_FLASH_MODEL` | Flash-tier model for classification/breakdown tasks |
 | `GEMINI_PRO_MODEL` | Pro-tier model, reserved for longer notes summaries |
+| `GROQ_API_KEY` | Fallback provider, only called if Gemini fails |
+| `GROQ_FLASH_MODEL` | Groq model used in place of the Gemini flash tier |
+| `GROQ_PRO_MODEL` | Groq model used in place of the Gemini pro tier |
 | `CORS_ORIGIN` | Restrict API access to the known frontend origin |
 | `REQUEST_TIMEOUT_SECONDS` | Per-call timeout |
 | `REQUEST_MAX_RETRIES` | Bounded retry-with-backoff on transient failures |
