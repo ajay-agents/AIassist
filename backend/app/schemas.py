@@ -15,7 +15,7 @@ class SubjectInput(BaseModel):
 
 
 class StudyPlanRequest(BaseModel):
-    subjects: list[SubjectInput]
+    subjects: list[SubjectInput] = Field(..., min_length=1)
     grade_level: str
     total_days: int = Field(..., gt=0)
     hours_per_day: float = Field(..., gt=0)

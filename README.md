@@ -72,6 +72,9 @@ backend/
     test_llm_client.py        Unit tests for the Gemini→Groq fallback logic
 requirements.txt
 .env.example
+streamlit_app/
+  app.py                 Manual test console — not the production frontend
+  requirements.txt
 ```
 
 ## Setup
@@ -109,6 +112,26 @@ pytest tests/ -v
 Tests cover only the deterministic layer (scheduler, frequency tallying) —
 no LLM calls, no API key required. This matches the FRD's correctness
 requirement: all arithmetic must be unit-tested independently of the model.
+
+## Test console (Streamlit)
+
+A throwaway UI for manually exercising all three endpoints — not the
+production frontend, just for sending this to testers before the real React
+UI is wired up.
+
+```bash
+cd backend && uvicorn app.main:app --reload      # terminal 1
+cd streamlit_app
+pip install -r requirements.txt
+streamlit run app.py                              # terminal 2
+```
+
+It defaults to `http://localhost:8000`; point it elsewhere by setting
+`STUDY_DESK_API_URL` or editing the "API base URL" field in the sidebar,
+which also has a health-check button. Each tab (Study Plan / PYQ Analysis /
+Notes Summarizer) posts straight to the matching backend endpoint and
+renders the response — day-by-day schedule tables, frequency tables with
+bar charts, or the rendered markdown summary and key terms.
 
 ## Endpoints
 
@@ -153,7 +176,10 @@ deploying — the lineup changes fast.
 ## Status
 
 Backend scaffold complete: schemas, routers, deterministic scheduler and
-frequency logic (unit-tested), and a Gemini client wrapper with structured
-output, explicit safety settings, and bounded retries. Not yet done:
-wiring in the existing React frontend, end-to-end testing against live
-Gemini calls, and confirming exact model names at implementation time.
+frequency logic (unit-tested), a Gemini client wrapper with structured
+output, explicit safety settings, and bounded retries, and a Groq fallback
+for when Gemini fails outright. A Streamlit test console is available for
+manually exercising all three endpoints ahead of the real frontend. Not yet
+done: wiring in the existing React frontend, end-to-end testing against
+live Gemini/Groq calls, and confirming exact model names at implementation
+time.
