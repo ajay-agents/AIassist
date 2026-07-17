@@ -1,11 +1,16 @@
 """Manual test console for the Study Desk backend — NOT the production
 frontend (that's the existing React app per the FRD). This just gives
 testers a quick way to hit the three Phase 1 endpoints and eyeball results.
+
+Deliberately avoids every Streamlit widget that touches pandas/pyarrow
+(st.dataframe, st.data_editor, st.table, st.bar_chart, ...) — those lazily
+import pyarrow's native lib, which some locked-down Windows machines block
+via Application Control policy. Tables are rendered as plain markdown and
+subject rows are managed by hand in session_state instead.
 """
 
 import os
 
-import pandas as pd
 import requests
 import streamlit as st
 
@@ -50,6 +55,16 @@ def post_json(path: str, payload: dict) -> dict | None:
     return resp.json()
 
 
+def markdown_table(rows: list[dict]) -> str:
+    if not rows:
+        return "_none_"
+    headers = list(rows[0].keys())
+    lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+    for row in rows:
+        lines.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
+    return "\n".join(lines)
+
+
 tab_plan, tab_pyq, tab_notes = st.tabs(["Study Plan", "PYQ Analysis", "Notes Summarizer"])
 
 # ---------------------------------------------------------------------------
@@ -65,36 +80,37 @@ with tab_plan:
         "Hours per day", min_value=0.5, value=3.0, step=0.5, key="plan_hours"
     )
 
-    st.markdown("**Subjects** — add or edit rows below")
-    default_subjects = pd.DataFrame(
-        [
-            {
-                "name": "Physics",
-                "topics_or_syllabus": "Kinematics, Thermodynamics, Optics",
-                "priority": 3,
-                "difficulty": 3,
-            },
-            {
-                "name": "Chemistry",
-                "topics_or_syllabus": "Bonding, Equilibrium",
-                "priority": 4,
-                "difficulty": 4,
-            },
+    if "subjects" not in st.session_state:
+        st.session_state.subjects = [
+            {"name": "Physics", "topics_or_syllabus": "Kinematics, Thermodynamics, Optics", "priority": 3, "difficulty": 3},
+            {"name": "Chemistry", "topics_or_syllabus": "Bonding, Equilibrium", "priority": 4, "difficulty": 4},
         ]
-    )
-    subjects_df = st.data_editor(
-        default_subjects,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="subjects_editor",
-        column_config={
-            "priority": st.column_config.NumberColumn(min_value=1, max_value=5),
-            "difficulty": st.column_config.NumberColumn(min_value=1, max_value=5),
-        },
-    )
+
+    st.markdown("**Subjects**")
+    for i, subject in enumerate(st.session_state.subjects):
+        row1, row2, row3, row4, row5 = st.columns([3, 5, 2, 2, 1])
+        subject["name"] = row1.text_input("Name", value=subject["name"], key=f"subj_name_{i}")
+        subject["topics_or_syllabus"] = row2.text_input(
+            "Topics / syllabus", value=subject["topics_or_syllabus"], key=f"subj_topics_{i}"
+        )
+        subject["priority"] = row3.number_input(
+            "Priority", min_value=1, max_value=5, value=subject["priority"], key=f"subj_priority_{i}"
+        )
+        subject["difficulty"] = row4.number_input(
+            "Difficulty", min_value=1, max_value=5, value=subject["difficulty"], key=f"subj_difficulty_{i}"
+        )
+        if row5.button("✕", key=f"subj_remove_{i}"):
+            st.session_state.subjects.pop(i)
+            st.rerun()
+
+    if st.button("Add subject"):
+        st.session_state.subjects.append(
+            {"name": "", "topics_or_syllabus": "", "priority": 3, "difficulty": 3}
+        )
+        st.rerun()
 
     if st.button("Generate plan", type="primary", key="plan_submit"):
-        subjects = [row for row in subjects_df.to_dict("records") if row.get("name")]
+        subjects = [s for s in st.session_state.subjects if s["name"].strip()]
         if not subjects:
             st.warning("Add at least one subject first.")
         else:
@@ -112,7 +128,7 @@ with tab_plan:
                 for day in result["days"]:
                     with st.expander(f"Day {day['day']} — {day['total_minutes']} min"):
                         if day["sessions"]:
-                            st.dataframe(pd.DataFrame(day["sessions"]), use_container_width=True)
+                            st.markdown(markdown_table(day["sessions"]))
                         else:
                             st.caption("No sessions scheduled.")
 
@@ -143,23 +159,19 @@ with tab_pyq:
             if result:
                 st.success("Analysis complete")
 
-                st.markdown("**High-yield topics:** " + ", ".join(result["high_yield_topics"]) or "none")
+                st.markdown("**High-yield topics:** " + (", ".join(result["high_yield_topics"]) or "none"))
                 if result.get("strategy_insight"):
                     st.info(result["strategy_insight"])
 
                 col_a, col_b = st.columns(2)
                 with col_a:
                     st.markdown("**Topic frequency**")
-                    topic_df = pd.DataFrame(result["topic_frequency"])
-                    if not topic_df.empty:
-                        st.dataframe(topic_df, use_container_width=True)
-                        st.bar_chart(topic_df.set_index("label")["percentage"])
+                    for entry in result["topic_frequency"]:
+                        st.progress(entry["percentage"] / 100, text=f"{entry['label']} — {entry['percentage']:.0f}% ({entry['count']})")
                 with col_b:
                     st.markdown("**Question-type frequency**")
-                    type_df = pd.DataFrame(result["type_frequency"])
-                    if not type_df.empty:
-                        st.dataframe(type_df, use_container_width=True)
-                        st.bar_chart(type_df.set_index("label")["percentage"])
+                    for entry in result["type_frequency"]:
+                        st.progress(entry["percentage"] / 100, text=f"{entry['label']} — {entry['percentage']:.0f}% ({entry['count']})")
 
 # ---------------------------------------------------------------------------
 # Notes Summarizer
