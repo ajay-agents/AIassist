@@ -42,7 +42,9 @@ st.title("📚 Study Desk — Test Console")
 st.caption("Study Plan Generator · PYQ Analysis · Notes Summarizer")
 
 
-def post_json(path: str, payload: dict) -> dict | None:
+def post_json(path: str, payload: dict) -> requests.Response | None:
+    """Returns the raw response (not just the JSON body) so callers can also
+    read the X-LLM-* provenance headers and timing for display."""
     url = f"{st.session_state.backend_url}{path}"
     try:
         resp = requests.post(url, json=payload, timeout=120)
@@ -52,7 +54,24 @@ def post_json(path: str, payload: dict) -> dict | None:
     if resp.status_code >= 400:
         st.error(f"{resp.status_code} from {path}: {resp.text}")
         return None
-    return resp.json()
+    return resp
+
+
+def render_llm_meta(resp: requests.Response) -> None:
+    """Shows which provider/model actually answered and how long it took —
+    lets testers confirm the Gemini→Groq fallback and the flash/pro tier
+    switch are firing as expected, without changing the JSON contract."""
+    provider = resp.headers.get("X-LLM-Provider")
+    if not provider:
+        return
+    model = resp.headers.get("X-LLM-Model", "?")
+    tier = resp.headers.get("X-LLM-Tier", "?")
+    parts = [f"provider: **{provider}**", f"model: `{model}`", f"tier: {tier}"]
+    insight_provider = resp.headers.get("X-LLM-Insight-Provider")
+    if insight_provider:
+        parts.append(f"insight provider: **{insight_provider}**")
+    parts.append(f"{resp.elapsed.total_seconds():.1f}s")
+    st.caption(" · ".join(parts))
 
 
 def markdown_table(rows: list[dict]) -> str:
@@ -121,9 +140,11 @@ with tab_plan:
                 "hours_per_day": float(hours_per_day),
             }
             with st.spinner("Calling /generate-study-plan..."):
-                result = post_json("/generate-study-plan", payload)
-            if result:
+                resp = post_json("/generate-study-plan", payload)
+            if resp:
+                result = resp.json()
                 st.success("Plan generated")
+                render_llm_meta(resp)
                 st.markdown(f"**Summary:** {result['summary']}")
                 for day in result["days"]:
                     with st.expander(f"Day {day['day']} — {day['total_minutes']} min"):
@@ -155,9 +176,11 @@ with tab_pyq:
                 "questions_text": questions_text,
             }
             with st.spinner("Calling /analyze-pyqs..."):
-                result = post_json("/analyze-pyqs", payload)
-            if result:
+                resp = post_json("/analyze-pyqs", payload)
+            if resp:
+                result = resp.json()
                 st.success("Analysis complete")
+                render_llm_meta(resp)
 
                 st.markdown("**High-yield topics:** " + (", ".join(result["high_yield_topics"]) or "none"))
                 if result.get("strategy_insight"):
@@ -184,6 +207,10 @@ with tab_notes:
     notes_grade = col2.text_input("Grade level", value="Grade 10", key="notes_grade")
     style = col3.selectbox("Style", ["structured", "bullet", "exam-focused"], key="notes_style")
     notes_text = st.text_area("Pasted notes", height=260, key="notes_text")
+    st.caption(
+        f"{len(notes_text)} characters — the backend automatically switches to the "
+        "pro-tier model for longer pastes (see provider/tier shown after summarizing)."
+    )
 
     if st.button("Summarize", type="primary", key="notes_submit"):
         if not notes_text.strip():
@@ -196,9 +223,11 @@ with tab_notes:
                 "style": style,
             }
             with st.spinner("Calling /summarize-notes..."):
-                result = post_json("/summarize-notes", payload)
-            if result:
+                resp = post_json("/summarize-notes", payload)
+            if resp:
+                result = resp.json()
                 st.success("Summary ready")
+                render_llm_meta(resp)
                 st.markdown(result["summary_markdown"])
                 st.markdown("**Key terms**")
                 for term in result["key_terms"]:

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
+from app.config import settings
 from app.schemas import NotesRequest, NotesResponse
-from app.services.llm_client import generate_structured
+from app.services.llm_client import generate_structured, set_llm_headers
 
 router = APIRouter()
 
@@ -40,32 +41,53 @@ def _build_prompt(request: NotesRequest, chunk: str) -> str:
 
 
 @router.post("/summarize-notes", response_model=NotesResponse)
-def summarize_notes(request: NotesRequest) -> NotesResponse:
+def summarize_notes(request: NotesRequest, response: Response) -> NotesResponse:
     chunks = _chunk_notes(request.notes_text)
+
+    # GEM-3: longer notes get the pro tier for stronger reasoning; short
+    # pastes stay on flash. Decided once per request, from the original
+    # (unchunked) length, so every chunk of the same request is consistent.
+    model_tier = "pro" if len(request.notes_text) > settings.notes_pro_tier_char_threshold else "flash"
 
     summaries: list[str] = []
     key_terms: list[str] = []
     seen_terms: set[str] = set()
+    providers_used: set[str] = set()
+    models_used: set[str] = set()
 
     for chunk in chunks:
         try:
             result = generate_structured(
-                model_tier="flash", prompt=_build_prompt(request, chunk), response_schema=NotesResponse
+                model_tier=model_tier, prompt=_build_prompt(request, chunk), response_schema=NotesResponse
             )
         except Exception as exc:  # noqa: BLE001 — surface as a clean API error
             raise HTTPException(status_code=502, detail=f"Notes summarization failed: {exc}") from exc
 
-        summary_markdown = result["summary_markdown"] if isinstance(result, dict) else result.summary_markdown
-        chunk_terms = result["key_terms"] if isinstance(result, dict) else result.key_terms
+        providers_used.add(result.provider)
+        models_used.add(result.model)
+        notes_result = result.data
+        summary_markdown = (
+            notes_result["summary_markdown"] if isinstance(notes_result, dict) else notes_result.summary_markdown
+        )
+        chunk_terms = notes_result["key_terms"] if isinstance(notes_result, dict) else notes_result.key_terms
 
-        summaries.append(summary_markdown)
+        if summary_markdown and summary_markdown.strip():
+            summaries.append(summary_markdown.strip())
         for term in chunk_terms:
             if term not in seen_terms:
                 seen_terms.add(term)
                 key_terms.append(term)
 
+    # Code's role here is schema and non-empty output validation only (no
+    # deterministic transform of the content itself) — GEM's Notes contract.
+    if not summaries:
+        raise HTTPException(status_code=422, detail="no summary could be generated from the given notes")
     if not key_terms:
         raise HTTPException(status_code=422, detail="no key terms could be extracted from the given notes")
+
+    response.headers["X-LLM-Provider"] = providers_used.pop() if len(providers_used) == 1 else "mixed"
+    response.headers["X-LLM-Model"] = models_used.pop() if len(models_used) == 1 else "mixed"
+    response.headers["X-LLM-Tier"] = model_tier
 
     combined_summary = "\n\n---\n\n".join(summaries) if len(summaries) > 1 else summaries[0]
     return NotesResponse(summary_markdown=combined_summary, key_terms=key_terms)

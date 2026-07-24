@@ -1,9 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from app.schemas import ClassifiedQuestion, PyqRequest, PyqResponse
 from app.services.frequency import compute_frequencies
-from app.services.llm_client import generate_structured
+from app.services.llm_client import generate_structured, set_llm_headers
 
 router = APIRouter()
 
@@ -44,14 +44,16 @@ def _build_insight_prompt(request: PyqRequest, high_yield_topics: list[str]) -> 
 
 
 @router.post("/analyze-pyqs", response_model=PyqResponse)
-def analyze_pyqs(request: PyqRequest) -> PyqResponse:
+def analyze_pyqs(request: PyqRequest, response: Response) -> PyqResponse:
     try:
-        classification = generate_structured(
+        classification_result = generate_structured(
             model_tier="flash", prompt=_build_classification_prompt(request), response_schema=_PyqClassification
         )
     except Exception as exc:  # noqa: BLE001 — surface as a clean API error
         raise HTTPException(status_code=502, detail=f"PYQ classification failed: {exc}") from exc
 
+    set_llm_headers(response, classification_result, "flash")
+    classification = classification_result.data
     questions = classification["questions"] if isinstance(classification, dict) else classification.questions
 
     try:
@@ -60,12 +62,14 @@ def analyze_pyqs(request: PyqRequest) -> PyqResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
-        insight = generate_structured(
+        insight_result = generate_structured(
             model_tier="flash",
             prompt=_build_insight_prompt(request, high_yield_topics),
             response_schema=_StrategyInsight,
         )
+        insight = insight_result.data
         strategy_insight = insight["strategy_insight"] if isinstance(insight, dict) else insight.strategy_insight
+        response.headers["X-LLM-Insight-Provider"] = insight_result.provider
     except Exception:  # noqa: BLE001 — insight is a nice-to-have, never blocks the result
         strategy_insight = ""
 

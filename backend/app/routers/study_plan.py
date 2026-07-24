@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from app.schemas import LearningUnit, StudyPlanRequest, StudyPlanResponse
-from app.services.llm_client import generate_structured
+from app.services.llm_client import generate_structured, set_llm_headers
 from app.services.scheduler import build_schedule
 
 router = APIRouter()
@@ -36,14 +36,16 @@ def _build_prompt(request: StudyPlanRequest) -> str:
 
 
 @router.post("/generate-study-plan", response_model=StudyPlanResponse)
-def generate_study_plan(request: StudyPlanRequest) -> StudyPlanResponse:
+def generate_study_plan(request: StudyPlanRequest, response: Response) -> StudyPlanResponse:
     prompt = _build_prompt(request)
 
     try:
-        breakdown = generate_structured(model_tier="flash", prompt=prompt, response_schema=_PlanBreakdown)
+        result = generate_structured(model_tier="flash", prompt=prompt, response_schema=_PlanBreakdown)
     except Exception as exc:  # noqa: BLE001 — surface as a clean API error
         raise HTTPException(status_code=502, detail=f"Study plan breakdown failed: {exc}") from exc
 
+    set_llm_headers(response, result, "flash")
+    breakdown = result.data
     units = breakdown["units"] if isinstance(breakdown, dict) else breakdown.units
     summary = breakdown["summary"] if isinstance(breakdown, dict) else breakdown.summary
 

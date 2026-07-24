@@ -28,7 +28,8 @@ def test_uses_gemini_when_it_succeeds(monkeypatch):
 
     result = llm_client.generate_structured(model_tier="flash", prompt="p", response_schema=_Schema)
 
-    assert result.value == "from-gemini"
+    assert result.data.value == "from-gemini"
+    assert result.provider == "gemini"
     assert gemini.calls == 1
     assert groq.calls == 0
 
@@ -41,7 +42,8 @@ def test_falls_back_to_groq_when_gemini_fails(monkeypatch):
 
     result = llm_client.generate_structured(model_tier="flash", prompt="p", response_schema=_Schema)
 
-    assert result.value == "from-groq"
+    assert result.data.value == "from-groq"
+    assert result.provider == "groq"
     assert gemini.calls == 1
     assert groq.calls == 1
 
