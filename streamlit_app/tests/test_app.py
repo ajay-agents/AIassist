@@ -10,6 +10,17 @@ from unittest.mock import Mock, patch
 
 from streamlit.testing.v1 import AppTest
 
+from app import merge_extracted_text
+
+
+def test_merge_extracted_text_appends_when_existing_has_content():
+    assert merge_extracted_text("Existing notes.", "New PDF text.") == "Existing notes.\n\nNew PDF text."
+
+
+def test_merge_extracted_text_replaces_when_existing_is_blank():
+    assert merge_extracted_text("   ", "New PDF text.") == "New PDF text."
+    assert merge_extracted_text("", "New PDF text.") == "New PDF text."
+
 
 def _fake_response(json_body: dict, headers: dict | None = None) -> Mock:
     resp = Mock()
@@ -18,6 +29,25 @@ def _fake_response(json_body: dict, headers: dict | None = None) -> Mock:
     resp.headers = headers or {}
     resp.elapsed = timedelta(seconds=0.42)
     return resp
+
+
+def _rendered_html(at: AppTest) -> str:
+    """Results render via st.components.v1.html — AppTest exposes that as an
+    UnknownElement of type 'iframe' whose proto.srcdoc holds the actual HTML.
+    Returns the srcdoc of the last such element found (the most recent
+    result rendered), searched across the whole app tree."""
+
+    def walk(node):
+        if getattr(node, "type", None) == "iframe":
+            yield node.proto.srcdoc
+        children = getattr(node, "children", None)
+        if children:
+            for child in children.values():
+                yield from walk(child)
+
+    matches = list(walk(at.main))
+    assert matches, "expected at least one rendered HTML report"
+    return matches[-1]
 
 
 def test_health_check_success():
@@ -53,7 +83,10 @@ def test_study_plan_happy_path_renders_schedule():
     assert at.exception == []
     assert any("Plan generated" in s.value for s in at.success)
     assert any("gemini" in c.value for c in at.caption)
-    assert any("Kinematics" in m.value for m in at.markdown)
+    rendered = _rendered_html(at)
+    assert "Kinematics" in rendered
+    assert "Focus on mechanics this week." in rendered
+    assert any(b.label == "⬇️ Download as HTML" for b in at.get("download_button"))
 
 
 def test_pyq_happy_path_renders_frequencies():
@@ -77,7 +110,9 @@ def test_pyq_happy_path_renders_frequencies():
     assert at.exception == []
     assert any("Analysis complete" in s.value for s in at.success)
     assert any("groq" in c.value for c in at.caption)
-    assert any("Kinematics" in i.value for i in at.info)
+    rendered = _rendered_html(at)
+    assert "Kinematics" in rendered
+    assert "Focus on Kinematics." in rendered
 
 
 def test_notes_happy_path_renders_summary_and_terms():
@@ -96,4 +131,6 @@ def test_notes_happy_path_renders_summary_and_terms():
     assert at.exception == []
     assert any("Summary ready" in s.value for s in at.success)
     assert any("pro" in c.value for c in at.caption)
-    assert any("mitochondria" in m.value for m in at.markdown)
+    rendered = _rendered_html(at)
+    assert "Cell Biology" in rendered
+    assert "mitochondria" in rendered

@@ -31,7 +31,7 @@ to the model.** Every deterministic computation lives in
 
 ## Quickstart
 
-Two terminals: one for the API, one for the test dashboard.
+Two terminals: one for the API, one for the React app.
 
 ```bash
 # clone / cd into the repo, then:
@@ -40,18 +40,19 @@ pip install -r requirements.txt
 copy .env.example .env                              # then paste in GEMINI_API_KEY
 
 cd backend
-uvicorn app.main:app --reload                        # terminal 1 — API on http://localhost:8000
+python -m uvicorn app.main:app --reload               # terminal 1 — API on http://localhost:8000
 ```
 
 ```bash
-cd streamlit_app
-pip install -r requirements.txt
-streamlit run app.py                                  # terminal 2 — dashboard on http://localhost:8501
+cd frontend
+npm install
+npm run dev                                            # terminal 2 — React app on http://localhost:5173
 ```
 
-Open the dashboard, click **Check health** in the sidebar, then try each of
-the three tabs. See [Troubleshooting](#troubleshooting) if either side
-won't start.
+Open the app, click **Check health**, then try each of the three tabs. See
+[Troubleshooting](#troubleshooting) if it won't start. A Streamlit test
+console also exists (`streamlit_app/`) as a lighter-weight alternative —
+see [Running the Streamlit test console](#running-the-streamlit-test-console).
 
 ---
 
@@ -59,8 +60,8 @@ won't start.
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Frontend | React (Vite) — not in this repo yet | Forms + results for the three tools; talks to the backend only |
-| Test console | Streamlit (`streamlit_app/`) | Manual harness for testers ahead of the real frontend |
+| Frontend | React + Vite + TypeScript + Tailwind (`frontend/`) | Polished UI for the three tools; PDF upload, talks to the backend only |
+| Test console | Streamlit (`streamlit_app/`) | Lighter-weight manual harness, alternative to the React app |
 | Backend | FastAPI (`backend/`) | Validation, orchestration, deterministic computation |
 | LLM layer | Gemini API (`google-genai`), Groq as fallback | Content understanding, classification, generation |
 | Deterministic layer | Plain Python | Scheduling math and frequency tallying — never the model |
@@ -74,7 +75,13 @@ same contract regardless of which provider answered. If both providers
 fail, the caller gets one clear error naming both failures. Which provider
 and model actually answered is exposed via response headers (see
 [Response headers](#response-headers)) — not the JSON body, so the contract
-the eventual React frontend depends on never changes shape.
+both frontends depend on never changes shape.
+
+**PDF upload:** both the React app and the Streamlit console let a tester
+upload a PDF instead of pasting text. Extraction happens entirely
+client-side (`pdfjs-dist` in React, `pypdf` in Streamlit) — the backend
+never sees a PDF or knows they exist; it only ever receives plain text in
+the same JSON fields a pasted-text request would use.
 
 **Model tiers (GEM-3):** Study Plan and PYQ classification always use the
 flash tier. Notes Summarizer picks flash or pro per request: pastes longer
@@ -111,12 +118,36 @@ backend/
   pytest.ini
 requirements.txt
 .env.example
+frontend/
+  src/
+    App.tsx                       Tab shell: API base URL config, health check, the 3 tools
+    api/
+      types.ts                      TypeScript mirror of backend/app/schemas.py
+      client.ts                      fetch wrapper: typed errors, X-LLM-* header parsing
+    lib/
+      pdfText.ts                     Client-side PDF extraction (pdfjs-dist) — lazy-loaded
+      pdfExtractionError.ts           Error class, split out so importing it doesn't pull in pdfjs-dist
+    components/
+      PdfUpload.tsx                   Reusable "or upload a PDF" control, used by all 3 tools
+      ui/Primitives.tsx                Shared Tailwind building blocks (Card, Chip, FrequencyBar, ...)
+    hooks/
+      useApiBaseUrl.ts                 localStorage-persisted API base URL
+    features/
+      studyPlan/StudyPlanTool.tsx       Subjects form + collapsible day-by-day roadmap
+      pyq/PyqTool.tsx                    Questions form + frequency bars/chips/insight
+      notes/NotesTool.tsx                Notes form + rendered markdown summary + glossary
+  package.json
+  .env.example                    VITE_API_BASE_URL
 streamlit_app/
-  app.py                       Manual test console — not the production frontend
-  requirements.txt              Runtime deps (streamlit, requests)
+  app.py                       Lighter-weight test console — alternative to the React app
+  pdf_utils.py                  PDF→text extraction (client-side, no backend change)
+  html_render.py                 Renders each tool's JSON result as a polished, sanitized HTML report
+  requirements.txt              Runtime deps (streamlit, requests, pypdf, markdown, bleach)
   requirements-dev.txt           + pytest, for the tests below
   tests/
     test_app.py                   Headless UI tests (mocked backend, no API keys needed)
+    test_pdf_utils.py               PDF extraction error-handling tests (mocked PdfReader)
+    test_html_render.py              HTML rendering tests, incl. XSS-sanitization checks
 ```
 
 ---
@@ -141,54 +172,82 @@ fails. With neither key set, the API still boots and serves `/health`,
 
 ```bash
 cd backend
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
 ```
+
+Use `python -m uvicorn ...` rather than the bare `uvicorn` command — see
+[Troubleshooting](#troubleshooting) if the bare command fails with an
+Application Control policy error.
 
 Visit `http://localhost:8000/docs` for interactive OpenAPI docs. Pick a
 different port with `--port` if 8000 is already in use on your machine —
 check first with `netstat -ano | findstr :8000` (Windows) so you don't
 collide with something unrelated already listening there.
 
-## Running the test console (Streamlit)
+## Running the frontend (React)
 
-A throwaway UI for manually exercising all three endpoints — not the
-production frontend, just for sending this to testers before the real React
-UI is wired up.
+The primary, polished UI for testers and users.
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Opens on `http://localhost:5173` by default (Vite's default port, which is
+also what `CORS_ORIGIN` defaults to in `.env` — see
+[Troubleshooting](#troubleshooting) if you change either one without the
+other). Point it at a different backend by setting `VITE_API_BASE_URL`
+(copy `frontend/.env.example` to `frontend/.env`) or editing the "API base
+URL" field in the header, which persists to `localStorage` and has a
+health-check button.
+
+Every text input can also be filled by uploading a PDF instead of pasting —
+extraction happens client-side via `pdfjs-dist` (`src/lib/pdfText.ts`),
+dynamically imported only once a file is actually chosen so the ~1MB
+library never bloats the initial page load. Each tab posts to the matching
+backend endpoint and renders the result with Tailwind:
+
+- **Study Plan** — an editable subjects list (add/remove rows, or upload a
+  syllabus PDF to add one automatically) rendered as a collapsible
+  day-by-day roadmap with time-budget usage bars.
+- **PYQ Analysis** — paste questions or upload a PDF of past papers; get
+  topic/type frequency as percentage bars, high-yield topic chips, and the
+  strategy insight.
+- **Notes Summarizer** — paste notes or upload a PDF, pick a style, get an
+  expert-tutor-quality markdown summary (rendered via `react-markdown`,
+  which never executes raw HTML) plus a key-terms glossary. A live
+  character counter hints when the pro-tier model will kick in.
+
+After each successful call, a line shows which provider/model answered and
+how long it took — pulled from the `X-LLM-*` response headers, useful for
+confirming the Gemini→Groq fallback and the flash/pro switch are firing as
+expected.
+
+### Running the Streamlit test console
+
+A lighter-weight alternative to the React app — same three tools, same PDF
+upload and provider/tier visibility, rendered as a downloadable standalone
+HTML report instead of a full SPA. Useful when you just want a quick
+backend sanity check without an npm install.
 
 ```bash
 cd streamlit_app
 pip install -r requirements.txt
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
-It defaults to `http://localhost:8000`; point it elsewhere by setting
-`STUDY_DESK_API_URL` or editing the "API base URL" field in the sidebar,
-which also has a health-check button. Each tab (Study Plan / PYQ Analysis /
-Notes Summarizer) posts straight to the matching backend endpoint and
-renders the response:
-
-- **Study Plan** — an editable subjects list (add/remove rows) and a
-  day-by-day schedule rendered as markdown tables.
-- **PYQ Analysis** — paste questions, get topic/type frequency as progress
-  bars plus the high-yield topics and strategy insight.
-- **Notes Summarizer** — paste notes, pick a style, get the rendered
-  markdown summary and key terms. A live character counter hints when the
-  pro-tier model will kick in.
-
-After each successful call, a caption shows which provider/model answered
-and how long it took (e.g. `provider: gemini · model: gemini-3.6-flash ·
-tier: flash · 1.8s`) — pulled from response headers, useful for confirming
-the Gemini→Groq fallback and the flash/pro switch are firing as expected.
-
-The console deliberately avoids `st.dataframe`/`st.data_editor`/`st.bar_chart`
-— see [Troubleshooting](#troubleshooting) for why.
+(Use `python -m streamlit run app.py` rather than the bare `streamlit`
+command — see [Troubleshooting](#troubleshooting).) It defaults to
+`http://localhost:8000`; point it elsewhere via `STUDY_DESK_API_URL` or the
+sidebar's "API base URL" field.
 
 ## Running tests
 
 ```bash
 cd backend
 pip install -r ../requirements.txt
-pytest tests/ -v
+python -m pytest tests/ -v
 ```
 
 Covers the deterministic layer (scheduler, frequency tallying — no LLM
@@ -198,9 +257,21 @@ error paths. This matches the FRD's correctness requirement: all arithmetic
 must be unit-tested independently of the model.
 
 ```bash
+cd frontend
+npm install
+npm run test
+```
+
+Vitest + React Testing Library: the API client (error parsing, header
+parsing), the PDF extraction lib and upload component (mocked pdfjs-dist —
+real PDF parsing needs a browser, so these test our own error-handling and
+text-joining logic instead), and each tool component's happy-path and
+error-path rendering (mocked API client, no live backend needed).
+
+```bash
 cd streamlit_app
 pip install -r requirements-dev.txt
-pytest tests/ -v
+python -m pytest tests/ -v
 ```
 
 Headlessly executes the dashboard script (via Streamlit's `AppTest`) with
@@ -239,7 +310,7 @@ otherwise flash.
 ### Response headers
 
 None of the JSON response shapes above change — these are extra headers
-only, so the eventual React frontend's contract stays stable:
+only, so both frontends' contract stays stable:
 
 | Header | Meaning |
 |---|---|
@@ -271,9 +342,27 @@ Confirm current Gemini and Groq model names before deploying — both
 lineups change fast. Check https://ai.google.dev/gemini-api/docs/models and
 https://console.groq.com/docs/models.
 
+See `frontend/.env.example` for the frontend's one variable:
+
+| Variable | Purpose |
+|---|---|
+| `VITE_API_BASE_URL` | Default backend URL, baked in at build time (overridable at runtime in the header) |
+
 ---
 
 ## Troubleshooting
+
+**`Program 'uvicorn.exe' failed to run: An Application Control policy has
+blocked this file` (or the same for `streamlit.exe` / `pytest.exe`).** pip
+installs a small standalone launcher executable for each
+(`venv\Scripts\uvicorn.exe`, `streamlit.exe`, `pytest.exe`...), separate
+from `python.exe`. On machines with an Application Control policy
+(WDAC/AppLocker), those stubs often aren't allowlisted even though
+`python.exe` itself is (it's what ran your `pip install`). Fix: invoke the
+module through Python instead of the stub — `python -m uvicorn
+app.main:app --reload`, `python -m streamlit run app.py`, `python -m
+pytest tests/ -v` — which is what every command in this README already
+uses.
 
 **`ImportError: DLL load failed ... pyarrow` when running the dashboard.**
 Some locked-down Windows machines block `pyarrow`'s native DLL via
@@ -285,11 +374,21 @@ results render as markdown tables and `st.progress` bars) — if you hit this
 again after pulling changes, check whether a new widget call reintroduced
 one of them.
 
-**Dashboard shows "Unreachable" on Check health, or endpoint calls fail to
-connect.** The API isn't running, or the "API base URL" in the sidebar
-doesn't match. Confirm `uvicorn` is up with
+**The app (React or Streamlit) shows "Unreachable" on Check health, or
+endpoint calls fail to connect.** The API isn't running, or the "API base
+URL" field doesn't match. Confirm `uvicorn` is up with
 `curl http://localhost:8000/health` and that the port matches
-`STUDY_DESK_API_URL` / the sidebar field.
+`VITE_API_BASE_URL` / `STUDY_DESK_API_URL` / the header or sidebar field.
+
+**React app's requests fail in the browser console with a CORS error, even
+though `curl` against the same endpoint works fine.** `curl` doesn't
+enforce CORS, so it can't catch this — only a real browser does.
+`CORS_ORIGIN` in `.env` must exactly match the origin the frontend is
+actually served from (scheme + host + port). The default `.env`
+(`http://localhost:5173`) matches Vite's default port; if you run
+`npm run dev -- --port <other>` or deploy the frontend elsewhere, update
+`CORS_ORIGIN` (and restart the backend — it's read once at startup) to
+match.
 
 **A request returns `502` mentioning both Gemini and Groq errors.** Both
 providers failed — almost always missing/invalid API keys, or no network
@@ -309,9 +408,12 @@ pick a different `--port` rather than assuming it's safe to kill.
 Backend: schemas, routers, deterministic scheduler and frequency logic,
 Gemini client (structured output, explicit safety settings, bounded
 retries), Groq fallback, and the notes flash/pro tier switch — all
-unit- and route-tested. Streamlit test console: all three tools wired up,
-headless UI tests included, and pyarrow-safe for locked-down Windows
-machines. Not yet done: wiring in the existing React frontend and
-end-to-end testing against live Gemini/Groq calls (everything so far has
-been verified with mocked LLM responses, since no live API keys are
-configured in this environment).
+unit- and route-tested. React frontend: all three tools built with Tailwind,
+PDF upload (lazy-loaded, ~1MB `pdfjs-dist` kept out of the initial bundle),
+provider/tier visibility, 25 passing tests (API client, PDF extraction,
+component rendering), production build verified. Streamlit test console:
+same three tools, headless UI tests included, pyarrow-safe for locked-down
+Windows machines. End-to-end request/response flow (including CORS between
+the React dev server and the backend) verified against a live backend
+process. Not yet done: testing against live Gemini/Groq calls with real API
+keys (everything so far has been verified with mocked LLM responses).

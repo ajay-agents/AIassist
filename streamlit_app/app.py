@@ -1,18 +1,30 @@
 """Manual test console for the Study Desk backend — NOT the production
 frontend (that's the existing React app per the FRD). This just gives
-testers a quick way to hit the three Phase 1 endpoints and eyeball results.
+testers a quick way to hit the three Phase 1 endpoints, optionally via a
+PDF upload instead of pasting text, and see the result as a polished,
+downloadable HTML report.
+
+PDF extraction (pdf_utils.py) and HTML rendering (html_render.py) both run
+entirely in this Streamlit process — the backend's JSON contract is
+untouched, which matters since the FRD flags the eventual React frontend's
+contract as something to keep stable.
 
 Deliberately avoids every Streamlit widget that touches pandas/pyarrow
 (st.dataframe, st.data_editor, st.table, st.bar_chart, ...) — those lazily
 import pyarrow's native lib, which some locked-down Windows machines block
-via Application Control policy. Tables are rendered as plain markdown and
-subject rows are managed by hand in session_state instead.
+via Application Control policy. The subjects list is managed by hand in
+session_state, and results render as standalone HTML (via
+st.components.v1.html), which has no dataframe/arrow involvement at all.
 """
 
 import os
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
+
+from html_render import render_notes_html, render_pyq_html, render_study_plan_html
+from pdf_utils import PdfExtractionError, extract_pdf_text
 
 DEFAULT_BACKEND_URL = os.getenv("STUDY_DESK_API_URL", "http://localhost:8000")
 
@@ -74,14 +86,40 @@ def render_llm_meta(resp: requests.Response) -> None:
     st.caption(" · ".join(parts))
 
 
-def markdown_table(rows: list[dict]) -> str:
-    if not rows:
-        return "_none_"
-    headers = list(rows[0].keys())
-    lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
-    for row in rows:
-        lines.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
-    return "\n".join(lines)
+def render_html_report(html: str, *, download_name: str, height: int = 650) -> None:
+    """Displays the rendered HTML inline and offers it as a standalone file
+    testers can save or send along."""
+    components.html(html, height=height, scrolling=True)
+    st.download_button("⬇️ Download as HTML", data=html, file_name=download_name, mime="text/html")
+
+
+def merge_extracted_text(existing: str, extracted: str) -> str:
+    """Pure merge logic, factored out so it's unit-testable without needing
+    to simulate a file upload through Streamlit's test harness (st.file_uploader
+    has no AppTest simulation support as of this Streamlit version)."""
+    return f"{existing}\n\n{extracted}" if existing.strip() else extracted
+
+
+def pdf_uploader_appends_to(state_key: str, uploader_key: str, label: str) -> None:
+    """Renders a PDF uploader; on a NEW file, extracts its text and appends
+    it into st.session_state[state_key]. Must be called BEFORE the widget
+    that owns state_key is instantiated, so the update takes effect this run.
+    Guards against re-appending the same file on every unrelated rerun."""
+    uploaded = st.file_uploader(label, type=["pdf"], key=uploader_key)
+    if uploaded is None:
+        return
+    signature = (uploaded.name, uploaded.size)
+    sig_state_key = f"{uploader_key}_signature"
+    if st.session_state.get(sig_state_key) == signature:
+        return
+    st.session_state[sig_state_key] = signature
+    try:
+        extracted = extract_pdf_text(uploaded)
+    except PdfExtractionError as exc:
+        st.error(str(exc))
+        return
+    st.session_state[state_key] = merge_extracted_text(st.session_state.get(state_key, ""), extracted)
+    st.caption(f"Extracted {len(extracted)} characters from '{uploaded.name}' and added below.")
 
 
 tab_plan, tab_pyq, tab_notes = st.tabs(["Study Plan", "PYQ Analysis", "Notes Summarizer"])
@@ -104,6 +142,24 @@ with tab_plan:
             {"name": "Physics", "topics_or_syllabus": "Kinematics, Thermodynamics, Optics", "priority": 3, "difficulty": 3},
             {"name": "Chemistry", "topics_or_syllabus": "Bonding, Equilibrium", "priority": 4, "difficulty": 4},
         ]
+
+    uploaded_syllabus = st.file_uploader(
+        "Or upload a syllabus PDF to add as a new subject (optional)", type=["pdf"], key="plan_pdf"
+    )
+    if uploaded_syllabus is not None:
+        signature = (uploaded_syllabus.name, uploaded_syllabus.size)
+        if st.session_state.get("plan_pdf_signature") != signature:
+            st.session_state["plan_pdf_signature"] = signature
+            try:
+                extracted = extract_pdf_text(uploaded_syllabus)
+            except PdfExtractionError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state.subjects.append(
+                    {"name": uploaded_syllabus.name.rsplit(".", 1)[0], "topics_or_syllabus": extracted, "priority": 3, "difficulty": 3}
+                )
+                st.caption(f"Extracted {len(extracted)} characters — added as a new subject below.")
+                st.rerun()
 
     st.markdown("**Subjects**")
     for i, subject in enumerate(st.session_state.subjects):
@@ -145,13 +201,8 @@ with tab_plan:
                 result = resp.json()
                 st.success("Plan generated")
                 render_llm_meta(resp)
-                st.markdown(f"**Summary:** {result['summary']}")
-                for day in result["days"]:
-                    with st.expander(f"Day {day['day']} — {day['total_minutes']} min"):
-                        if day["sessions"]:
-                            st.markdown(markdown_table(day["sessions"]))
-                        else:
-                            st.caption("No sessions scheduled.")
+                html = render_study_plan_html(result, grade_level=grade_level, hours_per_day=float(hours_per_day))
+                render_html_report(html, download_name="study_plan.html")
 
 # ---------------------------------------------------------------------------
 # PYQ Analysis
@@ -162,13 +213,14 @@ with tab_pyq:
     col1, col2 = st.columns(2)
     pyq_subject = col1.text_input("Subject", value="Physics", key="pyq_subject")
     pyq_grade = col2.text_input("Grade level", value="Grade 10", key="pyq_grade")
+    pdf_uploader_appends_to("pyq_text", "pyq_pdf", "Or upload a PDF of past questions (optional)")
     questions_text = st.text_area(
         "Pasted previous-year questions (any format)", height=220, key="pyq_text"
     )
 
     if st.button("Analyze", type="primary", key="pyq_submit"):
         if not questions_text.strip():
-            st.warning("Paste at least one question first.")
+            st.warning("Paste at least one question first, or upload a PDF above.")
         else:
             payload = {
                 "subject": pyq_subject,
@@ -181,20 +233,8 @@ with tab_pyq:
                 result = resp.json()
                 st.success("Analysis complete")
                 render_llm_meta(resp)
-
-                st.markdown("**High-yield topics:** " + (", ".join(result["high_yield_topics"]) or "none"))
-                if result.get("strategy_insight"):
-                    st.info(result["strategy_insight"])
-
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.markdown("**Topic frequency**")
-                    for entry in result["topic_frequency"]:
-                        st.progress(entry["percentage"] / 100, text=f"{entry['label']} — {entry['percentage']:.0f}% ({entry['count']})")
-                with col_b:
-                    st.markdown("**Question-type frequency**")
-                    for entry in result["type_frequency"]:
-                        st.progress(entry["percentage"] / 100, text=f"{entry['label']} — {entry['percentage']:.0f}% ({entry['count']})")
+                html = render_pyq_html(result, subject=pyq_subject, grade_level=pyq_grade)
+                render_html_report(html, download_name="pyq_analysis.html")
 
 # ---------------------------------------------------------------------------
 # Notes Summarizer
@@ -206,6 +246,7 @@ with tab_notes:
     notes_subject = col1.text_input("Subject", value="Biology", key="notes_subject")
     notes_grade = col2.text_input("Grade level", value="Grade 10", key="notes_grade")
     style = col3.selectbox("Style", ["structured", "bullet", "exam-focused"], key="notes_style")
+    pdf_uploader_appends_to("notes_text", "notes_pdf", "Or upload a PDF of notes (optional)")
     notes_text = st.text_area("Pasted notes", height=260, key="notes_text")
     st.caption(
         f"{len(notes_text)} characters — the backend automatically switches to the "
@@ -214,7 +255,7 @@ with tab_notes:
 
     if st.button("Summarize", type="primary", key="notes_submit"):
         if not notes_text.strip():
-            st.warning("Paste some notes first.")
+            st.warning("Paste some notes first, or upload a PDF above.")
         else:
             payload = {
                 "subject": notes_subject,
@@ -228,7 +269,5 @@ with tab_notes:
                 result = resp.json()
                 st.success("Summary ready")
                 render_llm_meta(resp)
-                st.markdown(result["summary_markdown"])
-                st.markdown("**Key terms**")
-                for term in result["key_terms"]:
-                    st.markdown(f"- {term}")
+                html = render_notes_html(result, subject=notes_subject, grade_level=notes_grade, style=style)
+                render_html_report(html, download_name="notes_summary.html")

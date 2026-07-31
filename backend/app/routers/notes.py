@@ -27,16 +27,50 @@ def _chunk_notes(notes_text: str) -> list[str]:
     return chunks or [notes_text]
 
 
+_STYLE_GUIDANCE = {
+    "structured": (
+        "Organize by topic under clear ## headings, with short paragraphs or "
+        "sub-bullets under each. Favor a logical flow a student can read "
+        "top-to-bottom to build understanding, not just a list of facts."
+    ),
+    "bullet": (
+        "Use nested bullet points throughout, one idea per bullet. Group "
+        "related bullets under a ## heading per topic. Keep each bullet "
+        "short enough to scan in a few seconds."
+    ),
+    "exam-focused": (
+        "Lead each topic with the single most exam-relevant fact or formula, "
+        "bolded. Flag likely-to-be-tested distinctions, common mistakes, and "
+        "anything the notes emphasize or repeat. Skip background color that "
+        "wouldn't earn marks."
+    ),
+}
+
+
 def _build_prompt(request: NotesRequest, chunk: str) -> str:
+    style_guidance = _STYLE_GUIDANCE.get(request.style, "")
     return (
-        "You are summarizing a student's notes. Do not assume any specific "
-        "board, country, or textbook — work only from the content given.\n\n"
+        "You are an expert subject-matter tutor turning a student's raw notes "
+        "into a summary you would actually want to revise from. Do not assume "
+        "any specific board, country, or textbook — work only from the "
+        "content given, and never invent facts not present or implied in it.\n\n"
         f"Subject: {request.subject}\n"
         f"Grade level: {request.grade_level}\n"
         f"Requested style: {request.style}\n\n"
         f"Notes:\n{chunk}\n\n"
-        f"Produce a {request.style} markdown summary and a list of key terms "
-        "with brief definitions drawn only from this text."
+        "Write the summary as markdown:\n"
+        f"- {style_guidance}\n"
+        "- Use precise, plain language — explain any technical term the "
+        "first time it appears rather than assuming it's already understood.\n"
+        "- Preserve every distinct topic and any numbers, formulas, dates, or "
+        "definitions from the notes exactly as given; don't drop content to "
+        "save space.\n"
+        "- Where the notes imply a relationship (cause/effect, comparison, "
+        "sequence), make that relationship explicit rather than leaving the "
+        "reader to infer it.\n\n"
+        "Then list key terms: each one a term the student needs to know from "
+        "this text, paired with a one-sentence, exam-ready definition in your "
+        "own words (not just copied from the notes)."
     )
 
 
