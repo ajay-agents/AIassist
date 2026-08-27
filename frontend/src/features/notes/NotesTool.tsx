@@ -3,9 +3,30 @@ import ReactMarkdown from "react-markdown";
 import { ApiError, summarizeNotes } from "../../api/client";
 import type { LlmMeta, NotesResponse, NotesStyle } from "../../api/types";
 import { PdfUpload } from "../../components/PdfUpload";
-import { Card, ErrorBanner, LlmMetaLine, PrimaryButton, TextAreaField, TextField } from "../../components/ui/Primitives";
+import {
+  Card,
+  EmptyState,
+  ErrorBanner,
+  LlmMetaLine,
+  PrimaryButton,
+  SectionHeading,
+  StatRow,
+  StatTile,
+  TextAreaField,
+  TextField,
+  WarningBanner,
+} from "../../components/ui/Primitives";
 
-const STYLES: NotesStyle[] = ["structured", "bullet", "exam-focused"];
+const STYLES: { id: NotesStyle; label: string }[] = [
+  { id: "structured", label: "Structured" },
+  { id: "bullet", label: "Bullet" },
+  { id: "exam-focused", label: "Exam-focused" },
+];
+
+function wordCount(text: string): number {
+  const trimmed = text.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
 
 interface NotesToolProps {
   apiBaseUrl: string;
@@ -17,18 +38,19 @@ export function NotesTool({ apiBaseUrl }: NotesToolProps) {
   const [style, setStyle] = useState<NotesStyle>("structured");
   const [notesText, setNotesText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<NotesResponse | null>(null);
   const [llm, setLlm] = useState<LlmMeta | null>(null);
 
   async function handleSubmit() {
+    setWarning(null);
+    setError(null);
     if (!notesText.trim()) {
-      setError("Paste some notes first, or upload a PDF above.");
+      setWarning("Paste some notes first, or upload a PDF above.");
       return;
     }
     setLoading(true);
-    setError(null);
-    setResult(null);
     try {
       const { data, llm } = await summarizeNotes(apiBaseUrl, {
         subject,
@@ -46,64 +68,95 @@ export function NotesTool({ apiBaseUrl }: NotesToolProps) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <TextField label="Subject" value={subject} onChange={setSubject} />
-        <TextField label="Grade level" value={gradeLevel} onChange={setGradeLevel} />
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-slate-700 dark:text-slate-300">Style</span>
-          <select
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-            value={style}
-            onChange={(e) => setStyle(e.target.value as NotesStyle)}
-          >
-            {STYLES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+      {/* Form column */}
+      <div className="flex flex-col gap-4">
+        <Card className="flex flex-col gap-4">
+          <SectionHeading>Your notes</SectionHeading>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <TextField label="Subject" value={subject} onChange={setSubject} />
+            <TextField label="Grade level" value={gradeLevel} onChange={setGradeLevel} />
+          </div>
 
-      <PdfUpload
-        label="Or upload a PDF of notes"
-        onExtracted={(text) => setNotesText((prev) => (prev.trim() ? `${prev}\n\n${text}` : text))}
-      />
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium text-muted">Style</span>
+            <div className="flex border border-rule">
+              {STYLES.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setStyle(s.id)}
+                  aria-pressed={style === s.id}
+                  className={`flex-1 border-r border-rule px-3 py-1.5 text-sm font-medium transition last:border-r-0 ${
+                    style === s.id ? "bg-ink text-paper" : "text-muted hover:bg-paper"
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <TextAreaField label="Pasted notes" value={notesText} onChange={setNotesText} rows={12} />
-      <p className="-mt-2 text-xs text-slate-500 dark:text-slate-400">
-        {notesText.length} characters — the backend automatically switches to the pro-tier model for longer pastes.
-      </p>
+          <PdfUpload
+            label="Upload a PDF of notes"
+            onExtracted={(text) => setNotesText((prev) => (prev.trim() ? `${prev}\n\n${text}` : text))}
+          />
 
-      <div>
-        <PrimaryButton onClick={handleSubmit} disabled={loading}>
+          <TextAreaField label="Pasted notes" value={notesText} onChange={setNotesText} rows={12} />
+          <p className="font-data -mt-2 text-xs text-muted">
+            {notesText.length} characters — the backend automatically switches to the pro-tier model for longer
+            pastes.
+          </p>
+        </Card>
+
+        <PrimaryButton onClick={handleSubmit} disabled={loading} loading={loading}>
           {loading ? "Summarizing…" : "Summarize"}
         </PrimaryButton>
+
+        {warning && <WarningBanner message={warning} />}
+        {error && <ErrorBanner message={error} />}
       </div>
 
-      {error && <ErrorBanner message={error} />}
+      {/* Results column */}
+      <div className="flex flex-col gap-3">
+        {!result && !loading && (
+          <EmptyState
+            title="Your summary will appear here"
+            description="Paste your notes and hit Summarize to get an expert-tutor-style summary plus key terms."
+          />
+        )}
 
-      {result && (
-        <div className="flex flex-col gap-3">
-          {llm && <LlmMetaLine {...llm} />}
+        {result && (
+          <>
+            {llm && <LlmMetaLine {...llm} />}
 
-          <Card className="prose prose-sm max-w-none prose-slate dark:prose-invert prose-headings:font-semibold prose-h2:border-b prose-h2:border-slate-200 prose-h2:pb-1 dark:prose-h2:border-slate-800">
-            <ReactMarkdown>{result.summary_markdown}</ReactMarkdown>
-          </Card>
+            <StatRow>
+              <StatTile label="Key terms" value={result.key_terms.length} />
+              <StatTile label="Style" value={STYLES.find((s) => s.id === style)?.label ?? style} />
+              <StatTile label="Summary length" value={`${wordCount(result.summary_markdown)}w`} />
+              <StatTile
+                label="Reading time"
+                value={`${Math.max(1, Math.round(wordCount(result.summary_markdown) / 200))} min`}
+              />
+            </StatRow>
 
-          <div>
-            <h3 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Key terms</h3>
-            <ul className="flex flex-col gap-2">
-              {result.key_terms.map((term, i) => (
-                <li key={i}>
-                  <Card className="text-sm text-slate-700 dark:text-slate-300">{term}</Card>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
+            <Card className="prose prose-sm max-w-none font-body prose-headings:font-display prose-headings:text-ink prose-p:text-ink prose-li:text-ink prose-strong:text-ink prose-a:text-accent-ink prose-code:text-ink prose-h2:border-b prose-h2:border-rule prose-h2:pb-1">
+              <ReactMarkdown>{result.summary_markdown}</ReactMarkdown>
+            </Card>
+
+            <div>
+              <SectionHeading count={result.key_terms.length}>Key terms</SectionHeading>
+              <ul className="flex flex-col gap-2">
+                {result.key_terms.map((term, i) => (
+                  <li key={i}>
+                    <Card className="text-sm text-ink">{term}</Card>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -4,13 +4,19 @@ import type { LlmMeta, PyqResponse } from "../../api/types";
 import { PdfUpload } from "../../components/PdfUpload";
 import {
   Callout,
+  Card,
   Chip,
+  EmptyState,
   ErrorBanner,
   FrequencyBar,
   LlmMetaLine,
   PrimaryButton,
+  SectionHeading,
+  StatRow,
+  StatTile,
   TextAreaField,
   TextField,
+  WarningBanner,
 } from "../../components/ui/Primitives";
 
 interface PyqToolProps {
@@ -22,18 +28,19 @@ export function PyqTool({ apiBaseUrl }: PyqToolProps) {
   const [gradeLevel, setGradeLevel] = useState("Grade 10");
   const [questionsText, setQuestionsText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PyqResponse | null>(null);
   const [llm, setLlm] = useState<LlmMeta | null>(null);
 
   async function handleSubmit() {
+    setWarning(null);
+    setError(null);
     if (!questionsText.trim()) {
-      setError("Paste at least one question first, or upload a PDF above.");
+      setWarning("Paste at least one question first, or upload a PDF above.");
       return;
     }
     setLoading(true);
-    setError(null);
-    setResult(null);
     try {
       const { data, llm } = await analyzePyqs(apiBaseUrl, {
         subject,
@@ -50,69 +57,95 @@ export function PyqTool({ apiBaseUrl }: PyqToolProps) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <TextField label="Subject" value={subject} onChange={setSubject} />
-        <TextField label="Grade level" value={gradeLevel} onChange={setGradeLevel} />
-      </div>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+      {/* Form column */}
+      <div className="flex flex-col gap-4">
+        <Card className="flex flex-col gap-4">
+          <SectionHeading>Past questions</SectionHeading>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <TextField label="Subject" value={subject} onChange={setSubject} />
+            <TextField label="Grade level" value={gradeLevel} onChange={setGradeLevel} />
+          </div>
 
-      <PdfUpload
-        label="Or upload a PDF of past questions"
-        onExtracted={(text) => setQuestionsText((prev) => (prev.trim() ? `${prev}\n\n${text}` : text))}
-      />
+          <PdfUpload
+            label="Upload a PDF of past questions"
+            onExtracted={(text) => setQuestionsText((prev) => (prev.trim() ? `${prev}\n\n${text}` : text))}
+          />
 
-      <TextAreaField
-        label="Pasted previous-year questions (any format)"
-        value={questionsText}
-        onChange={setQuestionsText}
-        rows={10}
-      />
+          <TextAreaField
+            label="Pasted previous-year questions (any format)"
+            value={questionsText}
+            onChange={setQuestionsText}
+            rows={10}
+          />
+        </Card>
 
-      <div>
-        <PrimaryButton onClick={handleSubmit} disabled={loading}>
+        <PrimaryButton onClick={handleSubmit} disabled={loading} loading={loading}>
           {loading ? "Analyzing…" : "Analyze"}
         </PrimaryButton>
+
+        {warning && <WarningBanner message={warning} />}
+        {error && <ErrorBanner message={error} />}
       </div>
 
-      {error && <ErrorBanner message={error} />}
+      {/* Results column */}
+      <div className="flex flex-col gap-3">
+        {!result && !loading && (
+          <EmptyState
+            title="Your frequency breakdown will appear here"
+            description="Paste past papers and hit Analyze to see which topics and question types come up most."
+          />
+        )}
 
-      {result && (
-        <div className="flex flex-col gap-3">
-          {llm && <LlmMetaLine {...llm} />}
+        {result && (
+          <>
+            {llm && <LlmMetaLine {...llm} />}
 
-          <div>
-            <h3 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-300">High-yield topics</h3>
-            {result.high_yield_topics.length === 0 ? (
-              <p className="text-sm text-slate-500 dark:text-slate-400">none identified</p>
-            ) : (
-              result.high_yield_topics.map((topic) => <Chip key={topic}>{topic}</Chip>)
-            )}
-          </div>
+            <StatRow>
+              <StatTile
+                label="Questions analyzed"
+                value={result.topic_frequency.reduce((sum, e) => sum + e.count, 0)}
+              />
+              <StatTile label="Topics found" value={result.topic_frequency.length} />
+              <StatTile label="High-yield" value={result.high_yield_topics.length} />
+              <StatTile label="Top topic" value={result.topic_frequency[0]?.label ?? "—"} />
+            </StatRow>
 
-          {result.strategy_insight && <Callout>{result.strategy_insight}</Callout>}
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <h3 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Topic frequency</h3>
+              <SectionHeading>High-yield topics</SectionHeading>
+              {result.high_yield_topics.length === 0 ? (
+                <p className="text-sm text-muted">none identified</p>
+              ) : (
+                <div>
+                  {result.high_yield_topics.map((topic) => (
+                    <Chip key={topic}>{topic}</Chip>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {result.strategy_insight && <Callout label="Strategy insight">{result.strategy_insight}</Callout>}
+
+            <Card>
+              <SectionHeading>Topic frequency</SectionHeading>
               {result.topic_frequency.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">No data.</p>
+                <p className="text-sm text-muted">No data.</p>
               ) : (
-                result.topic_frequency.map((entry) => <FrequencyBar key={entry.label} {...entry} />)
+                result.topic_frequency.map((entry, i) => <FrequencyBar key={entry.label} rank={i + 1} {...entry} />)
               )}
-            </div>
-            <div>
-              <h3 className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-300">
-                Question-type frequency
-              </h3>
+            </Card>
+
+            <Card>
+              <SectionHeading>Question-type frequency</SectionHeading>
               {result.type_frequency.length === 0 ? (
-                <p className="text-sm text-slate-500 dark:text-slate-400">No data.</p>
+                <p className="text-sm text-muted">No data.</p>
               ) : (
-                result.type_frequency.map((entry) => <FrequencyBar key={entry.label} {...entry} />)
+                result.type_frequency.map((entry, i) => <FrequencyBar key={entry.label} rank={i + 1} {...entry} />)
               )}
-            </div>
-          </div>
-        </div>
-      )}
+            </Card>
+          </>
+        )}
+      </div>
     </div>
   );
 }
