@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="callout">{{ summary }}</div>
+<h2>Day-by-day roadmap</h2>
+{% for day in days %}
+<details class="card"{% if day.is_open %} open{% endif %}>
+  <summary>Day {{ day.day }}<span class="day-usage">{{ day.total_minutes }} / {{ day.budget_minutes }} min ({{ day.pct_display }}%)</span></summary>
+  {% if day.sessions %}
+  <table>
+    <thead><tr><th></th><th>Subject</th><th>Topic</th><th>Time</th></tr></thead>
+    <tbody>
+    {% for s in day.sessions %}
+      <tr><td><span class="badge {{ s.kind }}">{{ s.kind_label }}</span></td><td>{{ s.subject }}</td><td>{{ s.topic }}</td><td>{{ s.minutes }} min</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:var(--muted)">No sessions scheduled.</p>
+  {% endif %}
+</details>
+{% endfor %}
+{% endblock %}

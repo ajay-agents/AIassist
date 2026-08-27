@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% from "_macros.html" import frequency_bars %}
+{% block content %}
+<h2>High-yield topics</h2>
+<div>
+{% if high_yield_topics %}
+{% for t in high_yield_topics %}<span class="chip">{{ t }}</span>{% endfor %}
+{% else %}
+<span style="color:var(--muted)">none identified</span>
+{% endif %}
+</div>
+{% if strategy_insight %}<div class="callout">{{ strategy_insight }}</div>{% endif %}
+<h2>Topic frequency</h2>
+{{ frequency_bars(topic_frequency) }}
+<h2>Question-type frequency</h2>
+{{ frequency_bars(type_frequency) }}
+{% endblock %}

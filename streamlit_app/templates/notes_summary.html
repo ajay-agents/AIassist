@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card prose">{{ summary_html }}</div>
+<h2>Key terms</h2>
+<ul style="list-style:none;padding:0">
+{% for term in key_terms %}
+<li class="card">{{ term }}</li>
+{% endfor %}
+</ul>
+{% endblock %}

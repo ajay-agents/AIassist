@@ -1,0 +1,13 @@
+{% macro frequency_bars(entries) %}
+{% if not entries %}
+<p style="color:var(--muted)">No data.</p>
+{% else %}
+{% for e in entries %}
+<div class="bar-row" title="{{ e.count }} question(s)">
+  <div class="bar-label">{{ e.label }}</div>
+  <div class="bar-track"><div class="bar-fill" style="width:{{ e.percentage_display }}%"></div></div>
+  <div class="bar-value">{{ e.percentage_display }}% ({{ e.count }})</div>
+</div>
+{% endfor %}
+{% endif %}
+{% endmacro %}
