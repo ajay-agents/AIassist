@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Response
 from app.config import settings
 from app.schemas import NotesRequest, NotesResponse
 from app.services.llm_client import generate_structured, set_llm_headers
+from app.services.prompting import chunk_text, wrap_student_content
 
 router = APIRouter()
 
@@ -10,21 +11,6 @@ router = APIRouter()
 # This is a char budget, not a token count — comfortably under the model's
 # context window while keeping each chunk coherent.
 _MAX_CHUNK_CHARS = 12_000
-
-
-def _chunk_notes(notes_text: str) -> list[str]:
-    paragraphs = notes_text.split("\n\n")
-    chunks: list[str] = []
-    current = ""
-    for paragraph in paragraphs:
-        if len(current) + len(paragraph) + 2 > _MAX_CHUNK_CHARS and current:
-            chunks.append(current)
-            current = paragraph
-        else:
-            current = f"{current}\n\n{paragraph}" if current else paragraph
-    if current:
-        chunks.append(current)
-    return chunks or [notes_text]
 
 
 _STYLE_GUIDANCE = {
@@ -57,7 +43,7 @@ def _build_prompt(request: NotesRequest, chunk: str) -> str:
         f"Subject: {request.subject}\n"
         f"Grade level: {request.grade_level}\n"
         f"Requested style: {request.style}\n\n"
-        f"Notes:\n{chunk}\n\n"
+        f"{wrap_student_content('Notes', chunk)}\n\n"
         "Write the summary as markdown:\n"
         f"- {style_guidance}\n"
         "- Use precise, plain language — explain any technical term the "
@@ -76,7 +62,7 @@ def _build_prompt(request: NotesRequest, chunk: str) -> str:
 
 @router.post("/summarize-notes", response_model=NotesResponse)
 def summarize_notes(request: NotesRequest, response: Response) -> NotesResponse:
-    chunks = _chunk_notes(request.notes_text)
+    chunks = chunk_text(request.notes_text, _MAX_CHUNK_CHARS)
 
     # GEM-3: longer notes get the pro tier for stronger reasoning; short
     # pastes stay on flash. Decided once per request, from the original

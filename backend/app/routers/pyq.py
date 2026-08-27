@@ -3,9 +3,15 @@ from pydantic import BaseModel
 
 from app.schemas import ClassifiedQuestion, PyqRequest, PyqResponse
 from app.services.frequency import compute_frequencies
-from app.services.llm_client import generate_structured, set_llm_headers
+from app.services.llm_client import generate_structured
+from app.services.prompting import chunk_text, wrap_student_content
 
 router = APIRouter()
+
+# Long pastes (e.g. several years of past papers) are chunked rather than
+# silently truncated — the same accept criterion Notes already had, now
+# applied consistently here too.
+_MAX_CHUNK_CHARS = 12_000
 
 
 class _PyqClassification(BaseModel):
@@ -19,7 +25,7 @@ class _StrategyInsight(BaseModel):
     strategy_insight: str
 
 
-def _build_classification_prompt(request: PyqRequest) -> str:
+def _build_classification_prompt(request: PyqRequest, chunk: str) -> str:
     return (
         "You are analyzing previous-year exam questions. Do not assume any "
         "specific board, country, or textbook — classify only from the content "
@@ -29,7 +35,7 @@ def _build_classification_prompt(request: PyqRequest) -> str:
         "Split the pasted text below into individual questions, then classify "
         "each by topic, question type (e.g. MCQ, short-answer, essay, numerical), "
         "and difficulty (easy/medium/hard).\n\n"
-        f"Questions:\n{request.questions_text}"
+        f"{wrap_student_content('Questions', chunk)}"
     )
 
 
@@ -45,19 +51,34 @@ def _build_insight_prompt(request: PyqRequest, high_yield_topics: list[str]) -> 
 
 @router.post("/analyze-pyqs", response_model=PyqResponse)
 def analyze_pyqs(request: PyqRequest, response: Response) -> PyqResponse:
-    try:
-        classification_result = generate_structured(
-            model_tier="flash", prompt=_build_classification_prompt(request), response_schema=_PyqClassification
-        )
-    except Exception as exc:  # noqa: BLE001 — surface as a clean API error
-        raise HTTPException(status_code=502, detail=f"PYQ classification failed: {exc}") from exc
+    chunks = chunk_text(request.questions_text, _MAX_CHUNK_CHARS)
 
-    set_llm_headers(response, classification_result, "flash")
-    classification = classification_result.data
-    questions = classification["questions"] if isinstance(classification, dict) else classification.questions
+    all_questions: list[ClassifiedQuestion] = []
+    providers_used: set[str] = set()
+    models_used: set[str] = set()
+
+    for chunk in chunks:
+        try:
+            classification_result = generate_structured(
+                model_tier="flash",
+                prompt=_build_classification_prompt(request, chunk),
+                response_schema=_PyqClassification,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface as a clean API error
+            raise HTTPException(status_code=502, detail=f"PYQ classification failed: {exc}") from exc
+
+        providers_used.add(classification_result.provider)
+        models_used.add(classification_result.model)
+        classification = classification_result.data
+        questions = classification["questions"] if isinstance(classification, dict) else classification.questions
+        all_questions.extend(questions)
+
+    response.headers["X-LLM-Provider"] = providers_used.pop() if len(providers_used) == 1 else "mixed"
+    response.headers["X-LLM-Model"] = models_used.pop() if len(models_used) == 1 else "mixed"
+    response.headers["X-LLM-Tier"] = "flash"
 
     try:
-        topic_frequency, type_frequency, high_yield_topics = compute_frequencies(questions)
+        topic_frequency, type_frequency, high_yield_topics = compute_frequencies(all_questions)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

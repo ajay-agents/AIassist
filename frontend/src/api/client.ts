@@ -51,7 +51,12 @@ function parseLlmMeta(headers: Headers, elapsedMs: number): LlmMeta | null {
   };
 }
 
-async function postJson<TResponse>(baseUrl: string, path: string, payload: unknown): Promise<ApiResult<TResponse>> {
+async function postJson<TResponse>(
+  baseUrl: string,
+  path: string,
+  payload: unknown,
+  signal?: AbortSignal,
+): Promise<ApiResult<TResponse>> {
   const start = performance.now();
   let response: Response;
   try {
@@ -59,8 +64,13 @@ async function postJson<TResponse>(baseUrl: string, path: string, payload: unkno
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal,
     });
   } catch (err) {
+    // Let an intentional cancellation (AbortController.abort()) propagate
+    // as-is so callers can tell "the user stopped this" apart from a real
+    // network failure, instead of both looking like the same ApiError.
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
     throw new ApiError(0, `Couldn't reach ${baseUrl} — is the backend running? (${(err as Error).message})`);
   }
   const elapsedMs = performance.now() - start;
@@ -86,14 +96,26 @@ export function checkHealth(baseUrl: string): Promise<{ status: string }> {
   });
 }
 
-export function generateStudyPlan(baseUrl: string, request: StudyPlanRequest): Promise<ApiResult<StudyPlanResponse>> {
-  return postJson<StudyPlanResponse>(baseUrl, "/generate-study-plan", request);
+export function generateStudyPlan(
+  baseUrl: string,
+  request: StudyPlanRequest,
+  signal?: AbortSignal,
+): Promise<ApiResult<StudyPlanResponse>> {
+  return postJson<StudyPlanResponse>(baseUrl, "/generate-study-plan", request, signal);
 }
 
-export function analyzePyqs(baseUrl: string, request: PyqRequest): Promise<ApiResult<PyqResponse>> {
-  return postJson<PyqResponse>(baseUrl, "/analyze-pyqs", request);
+export function analyzePyqs(
+  baseUrl: string,
+  request: PyqRequest,
+  signal?: AbortSignal,
+): Promise<ApiResult<PyqResponse>> {
+  return postJson<PyqResponse>(baseUrl, "/analyze-pyqs", request, signal);
 }
 
-export function summarizeNotes(baseUrl: string, request: NotesRequest): Promise<ApiResult<NotesResponse>> {
-  return postJson<NotesResponse>(baseUrl, "/summarize-notes", request);
+export function summarizeNotes(
+  baseUrl: string,
+  request: NotesRequest,
+  signal?: AbortSignal,
+): Promise<ApiResult<NotesResponse>> {
+  return postJson<NotesResponse>(baseUrl, "/summarize-notes", request, signal);
 }

@@ -50,3 +50,32 @@ def test_raises_on_empty_input():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_merges_topics_that_differ_only_in_case_or_whitespace():
+    # The model has no guarantee of labeling the same real topic identically
+    # across different questions — without normalization, these three
+    # variants would silently fragment into three separate buckets instead
+    # of counting as one topic with 3 questions.
+    questions = [
+        ClassifiedQuestion(text="q1", topic="Newton's Laws", question_type="MCQ", difficulty="easy"),
+        ClassifiedQuestion(text="q2", topic="newton's laws", question_type="MCQ", difficulty="easy"),
+        ClassifiedQuestion(text="q3", topic="  Newton's Laws  ", question_type="MCQ", difficulty="easy"),
+        ClassifiedQuestion(text="q4", topic="Optics", question_type="MCQ", difficulty="easy"),
+    ]
+    topic_frequency, _, high_yield_topics = compute_frequencies(questions)
+
+    assert len(topic_frequency) == 2
+    top = topic_frequency[0]
+    assert top.label == "Newton's Laws"  # first-seen casing preserved for display
+    assert top.count == 3
+    assert high_yield_topics == ["Newton's Laws", "Optics"]
+
+
+def test_raises_when_topics_are_all_blank():
+    questions = [ClassifiedQuestion(text="q1", topic="   ", question_type="MCQ", difficulty="easy")]
+    try:
+        compute_frequencies(questions)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass

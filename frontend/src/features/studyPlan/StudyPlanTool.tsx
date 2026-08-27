@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ApiError, generateStudyPlan } from "../../api/client";
 import type { LlmMeta, SubjectInput, StudyPlanResponse } from "../../api/types";
 import { PdfUpload } from "../../components/PdfUpload";
@@ -34,6 +34,10 @@ function formatMinutes(minutes: number): string {
   return mins === 0 ? `${hours}h` : `${hours}h ${mins}m`;
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
+}
+
 interface StudyPlanToolProps {
   apiBaseUrl: string;
 }
@@ -48,6 +52,7 @@ export function StudyPlanTool({ apiBaseUrl }: StudyPlanToolProps) {
   const [warning, setWarning] = useState<string | null>(null);
   const [result, setResult] = useState<StudyPlanResponse | null>(null);
   const [llm, setLlm] = useState<LlmMeta | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   function updateSubject(index: number, patch: Partial<SubjectInput>) {
     setSubjects((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
@@ -72,21 +77,29 @@ export function StudyPlanTool({ apiBaseUrl }: StudyPlanToolProps) {
       setWarning("Add at least one subject first.");
       return;
     }
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     try {
-      const { data, llm } = await generateStudyPlan(apiBaseUrl, {
-        subjects: validSubjects,
-        grade_level: gradeLevel,
-        total_days: totalDays,
-        hours_per_day: hoursPerDay,
-      });
+      const { data, llm } = await generateStudyPlan(
+        apiBaseUrl,
+        { subjects: validSubjects, grade_level: gradeLevel, total_days: totalDays, hours_per_day: hoursPerDay },
+        controller.signal,
+      );
       setResult(data);
       setLlm(llm);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong.");
+      if (!isAbortError(err)) {
+        setError(err instanceof ApiError ? err.message : "Something went wrong.");
+      }
     } finally {
       setLoading(false);
+      abortRef.current = null;
     }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
   }
 
   const budgetMinutes = Math.max(hoursPerDay * 60, 1);
@@ -104,7 +117,8 @@ export function StudyPlanTool({ apiBaseUrl }: StudyPlanToolProps) {
           </div>
 
           <PdfUpload
-            label="Upload a syllabus PDF to add as a new subject"
+            label="Upload syllabus PDFs — each one becomes a new subject"
+            multiple
             onExtracted={(text, fileName) =>
               addSubject({ name: fileName.replace(/\.pdf$/i, ""), topics_or_syllabus: text })
             }
@@ -116,47 +130,48 @@ export function StudyPlanTool({ apiBaseUrl }: StudyPlanToolProps) {
           {subjects.map((subject, i) => {
             const color = subjectColor(subject.name || `subject-${i}`);
             return (
-              <div key={i} className="flex flex-col gap-2 border border-rule p-3 sm:flex-row sm:items-end">
-                <div className="flex flex-1 items-end gap-2">
+              <div
+                key={i}
+                className="grid grid-cols-1 gap-2 border border-rule p-3 sm:grid-cols-[minmax(0,3fr)_minmax(0,4fr)_minmax(0,4.5rem)_minmax(0,4.5rem)_auto] sm:items-end"
+              >
+                <div className="flex min-w-0 items-end gap-2">
                   <SubjectDot colorClass={color.dot} />
-                  <div className="flex-1">
+                  <div className="min-w-0 flex-1">
                     <TextField label="Name" value={subject.name} onChange={(v) => updateSubject(i, { name: v })} />
                   </div>
                 </div>
-                <div className="flex-[2]">
+                <div className="min-w-0">
                   <TextField
                     label="Topics / syllabus"
                     value={subject.topics_or_syllabus}
                     onChange={(v) => updateSubject(i, { topics_or_syllabus: v })}
                   />
                 </div>
-                <div className="flex gap-2">
-                  <div className="w-20">
-                    <NumberField
-                      label="Priority"
-                      value={subject.priority}
-                      onChange={(v) => updateSubject(i, { priority: v })}
-                      min={1}
-                      max={5}
-                    />
-                  </div>
-                  <div className="w-20">
-                    <NumberField
-                      label="Difficulty"
-                      value={subject.difficulty}
-                      onChange={(v) => updateSubject(i, { difficulty: v })}
-                      min={1}
-                      max={5}
-                    />
-                  </div>
-                  <button
-                    onClick={() => removeSubject(i)}
-                    aria-label={`Remove subject ${subject.name || i + 1}`}
-                    className="mb-0.5 h-fit rounded-md px-2 py-2 text-muted transition hover:bg-danger/10 hover:text-danger"
-                  >
-                    <CloseIcon />
-                  </button>
+                <div className="min-w-0">
+                  <NumberField
+                    label="Priority"
+                    value={subject.priority}
+                    onChange={(v) => updateSubject(i, { priority: v })}
+                    min={1}
+                    max={5}
+                  />
                 </div>
+                <div className="min-w-0">
+                  <NumberField
+                    label="Difficulty"
+                    value={subject.difficulty}
+                    onChange={(v) => updateSubject(i, { difficulty: v })}
+                    min={1}
+                    max={5}
+                  />
+                </div>
+                <button
+                  onClick={() => removeSubject(i)}
+                  aria-label={`Remove subject ${subject.name || i + 1}`}
+                  className="h-fit justify-self-start rounded-md px-2 py-2 text-muted transition hover:bg-danger/10 hover:text-danger sm:mb-0.5 sm:justify-self-auto"
+                >
+                  <CloseIcon />
+                </button>
               </div>
             );
           })}
@@ -165,9 +180,12 @@ export function StudyPlanTool({ apiBaseUrl }: StudyPlanToolProps) {
           </SecondaryButton>
         </Card>
 
-        <PrimaryButton onClick={handleSubmit} disabled={loading} loading={loading}>
-          {loading ? "Generating…" : "Generate plan"}
-        </PrimaryButton>
+        <div className="flex gap-2">
+          <PrimaryButton onClick={handleSubmit} disabled={loading} loading={loading}>
+            {loading ? "Generating…" : "Generate plan"}
+          </PrimaryButton>
+          {loading && <SecondaryButton onClick={handleStop}>Stop</SecondaryButton>}
+        </div>
 
         {warning && <WarningBanner message={warning} />}
         {error && <ErrorBanner message={error} />}

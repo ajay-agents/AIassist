@@ -42,6 +42,7 @@ describe("StudyPlanTool", () => {
     expect(mockGenerate).toHaveBeenCalledWith(
       "http://localhost:8000",
       expect.objectContaining({ grade_level: "Grade 10", total_days: 7, hours_per_day: 3 }),
+      expect.any(AbortSignal),
     );
   });
 

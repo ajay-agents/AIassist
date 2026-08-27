@@ -75,4 +75,21 @@ describe("generateStudyPlan", () => {
     expect(err.message).toContain("Couldn't reach");
     vi.unstubAllGlobals();
   });
+
+  it("passes the AbortSignal through to fetch and rethrows AbortError as-is, not wrapped", async () => {
+    const fakeFetch = vi.fn().mockRejectedValue(new DOMException("The user aborted a request.", "AbortError"));
+    vi.stubGlobal("fetch", fakeFetch);
+    const controller = new AbortController();
+
+    const err = await generateStudyPlan("http://localhost:8000", payload, controller.signal).catch((e) => e);
+
+    expect(err).toBeInstanceOf(DOMException);
+    expect(err.name).toBe("AbortError");
+    expect(err).not.toBeInstanceOf(ApiError);
+    expect(fakeFetch).toHaveBeenCalledWith(
+      "http://localhost:8000/generate-study-plan",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    vi.unstubAllGlobals();
+  });
 });

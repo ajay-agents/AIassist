@@ -6,19 +6,38 @@ giving callers the same guarantee as the Gemini path.
 """
 
 import json
+import logging
 
-from groq import Groq
-from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
+import groq
+from pydantic import BaseModel, ValidationError
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+_TRANSIENT_GROQ_ERRORS = (groq.APIConnectionError, groq.APITimeoutError, groq.RateLimitError, groq.InternalServerError)
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """Only retry failures that might actually succeed on a second try. An
+    invalid API key, a 404 on a since-removed model, or a bad request will
+    fail identically every time — retrying those is pure wasted latency."""
+    if isinstance(exc, _TRANSIENT_GROQ_ERRORS):
+        return True
+    # The model's own output was malformed JSON or didn't match the schema —
+    # a fresh completion might do better, unlike a permanent config error.
+    if isinstance(exc, (json.JSONDecodeError, ValidationError)):
+        return True
+    return False
 
 
 class GroqClient:
     def __init__(self) -> None:
-        self._client = Groq(api_key=settings.groq_api_key, timeout=settings.request_timeout_seconds)
+        self._client = groq.Groq(api_key=settings.groq_api_key, timeout=settings.request_timeout_seconds)
 
     @retry(
+        retry=retry_if_exception(_is_transient),
         stop=stop_after_attempt(settings.request_max_retries),
         wait=wait_exponential(multiplier=1, min=1, max=8),
         reraise=True,
@@ -39,6 +58,17 @@ class GroqClient:
             ],
             response_format={"type": "json_object"},
         )
+
+        usage = getattr(completion, "usage", None)
+        if usage:
+            logger.info(
+                "groq call model=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                model,
+                getattr(usage, "prompt_tokens", None),
+                getattr(usage, "completion_tokens", None),
+                getattr(usage, "total_tokens", None),
+            )
+
         raw = completion.choices[0].message.content
         return response_schema.model_validate(json.loads(raw))
 

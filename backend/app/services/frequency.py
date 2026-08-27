@@ -9,23 +9,44 @@ from app.schemas import ClassifiedQuestion, FrequencyEntry
 _HIGH_YIELD_TOP_N = 5
 
 
-def _to_frequency_entries(counter: Counter) -> list[FrequencyEntry]:
+def _normalize_key(value: str) -> str:
+    """Groups labels by normalized casing/whitespace. The model has no
+    guarantee of labeling the same real topic identically across different
+    questions in one batch ("Newton's Laws" vs "newton's laws" vs "Newtons
+    Laws") — without this, each variant becomes its own bucket, silently
+    fragmenting what should be one topic's count."""
+    return " ".join(value.strip().lower().split())
+
+
+def _tally(labels: list[str]) -> tuple[Counter, dict[str, str]]:
+    counts: Counter = Counter()
+    display_labels: dict[str, str] = {}
+    for label in labels:
+        key = _normalize_key(label)
+        if not key:
+            continue
+        counts[key] += 1
+        display_labels.setdefault(key, label.strip())  # first-seen casing wins for display
+    return counts, display_labels
+
+
+def _to_frequency_entries(counter: Counter, display_labels: dict[str, str]) -> list[FrequencyEntry]:
     total = sum(counter.values())
     if total == 0:
         return []
 
     # Largest-remainder rounding so percentages sum to exactly 100,
     # not just "close to" 100 from naive per-item rounding.
-    raw = {label: (count / total) * 100 for label, count in counter.items()}
-    floored = {label: int(value) for label, value in raw.items()}
+    raw = {key: (count / total) * 100 for key, count in counter.items()}
+    floored = {key: int(value) for key, value in raw.items()}
     remainder = 100 - sum(floored.values())
     remainders_sorted = sorted(raw.items(), key=lambda kv: kv[1] - floored[kv[0]], reverse=True)
-    for label, _ in remainders_sorted[:remainder]:
-        floored[label] += 1
+    for key, _ in remainders_sorted[:remainder]:
+        floored[key] += 1
 
     entries = [
-        FrequencyEntry(label=label, count=counter[label], percentage=float(floored[label]))
-        for label in counter
+        FrequencyEntry(label=display_labels[key], count=counter[key], percentage=float(floored[key]))
+        for key in counter
     ]
     return sorted(entries, key=lambda e: e.count, reverse=True)
 
@@ -36,11 +57,14 @@ def compute_frequencies(
     if not questions:
         raise ValueError("at least one classified question is required")
 
-    topic_counts = Counter(q.topic for q in questions)
-    type_counts = Counter(q.question_type for q in questions)
+    topic_counts, topic_labels = _tally([q.topic for q in questions])
+    type_counts, type_labels = _tally([q.question_type for q in questions])
 
-    topic_frequency = _to_frequency_entries(topic_counts)
-    type_frequency = _to_frequency_entries(type_counts)
+    if not topic_counts:
+        raise ValueError("no non-empty topics were classified")
+
+    topic_frequency = _to_frequency_entries(topic_counts, topic_labels)
+    type_frequency = _to_frequency_entries(type_counts, type_labels)
     high_yield_topics = [entry.label for entry in topic_frequency[:_HIGH_YIELD_TOP_N]]
 
     return topic_frequency, type_frequency, high_yield_topics

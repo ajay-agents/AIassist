@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ApiError, summarizeNotes } from "../../api/client";
 import type { LlmMeta, NotesResponse, NotesStyle } from "../../api/types";
 import { PdfUpload } from "../../components/PdfUpload";
@@ -9,6 +10,7 @@ import {
   ErrorBanner,
   LlmMetaLine,
   PrimaryButton,
+  SecondaryButton,
   SectionHeading,
   StatRow,
   StatTile,
@@ -28,6 +30,10 @@ function wordCount(text: string): number {
   return trimmed ? trimmed.split(/\s+/).length : 0;
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
+}
+
 interface NotesToolProps {
   apiBaseUrl: string;
 }
@@ -42,6 +48,7 @@ export function NotesTool({ apiBaseUrl }: NotesToolProps) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<NotesResponse | null>(null);
   const [llm, setLlm] = useState<LlmMeta | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   async function handleSubmit() {
     setWarning(null);
@@ -50,21 +57,29 @@ export function NotesTool({ apiBaseUrl }: NotesToolProps) {
       setWarning("Paste some notes first, or upload a PDF above.");
       return;
     }
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     try {
-      const { data, llm } = await summarizeNotes(apiBaseUrl, {
-        subject,
-        grade_level: gradeLevel,
-        notes_text: notesText,
-        style,
-      });
+      const { data, llm } = await summarizeNotes(
+        apiBaseUrl,
+        { subject, grade_level: gradeLevel, notes_text: notesText, style },
+        controller.signal,
+      );
       setResult(data);
       setLlm(llm);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong.");
+      if (!isAbortError(err)) {
+        setError(err instanceof ApiError ? err.message : "Something went wrong.");
+      }
     } finally {
       setLoading(false);
+      abortRef.current = null;
     }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
   }
 
   return (
@@ -98,7 +113,8 @@ export function NotesTool({ apiBaseUrl }: NotesToolProps) {
           </div>
 
           <PdfUpload
-            label="Upload a PDF of notes"
+            label="Upload PDFs of notes"
+            multiple
             onExtracted={(text) => setNotesText((prev) => (prev.trim() ? `${prev}\n\n${text}` : text))}
           />
 
@@ -109,9 +125,12 @@ export function NotesTool({ apiBaseUrl }: NotesToolProps) {
           </p>
         </Card>
 
-        <PrimaryButton onClick={handleSubmit} disabled={loading} loading={loading}>
-          {loading ? "Summarizing…" : "Summarize"}
-        </PrimaryButton>
+        <div className="flex gap-2">
+          <PrimaryButton onClick={handleSubmit} disabled={loading} loading={loading}>
+            {loading ? "Summarizing…" : "Summarize"}
+          </PrimaryButton>
+          {loading && <SecondaryButton onClick={handleStop}>Stop</SecondaryButton>}
+        </div>
 
         {warning && <WarningBanner message={warning} />}
         {error && <ErrorBanner message={error} />}
@@ -140,13 +159,13 @@ export function NotesTool({ apiBaseUrl }: NotesToolProps) {
               />
             </StatRow>
 
-            <Card className="prose prose-sm max-w-none font-body prose-headings:font-display prose-headings:text-ink prose-p:text-ink prose-li:text-ink prose-strong:text-ink prose-a:text-accent-ink prose-code:text-ink prose-h2:border-b prose-h2:border-rule prose-h2:pb-1">
-              <ReactMarkdown>{result.summary_markdown}</ReactMarkdown>
+            <Card className="prose prose-sm max-h-[32rem] max-w-none overflow-auto font-body prose-headings:font-display prose-headings:text-ink prose-p:text-ink prose-li:text-ink prose-strong:text-ink prose-a:text-accent-ink prose-code:text-ink prose-h2:border-b prose-h2:border-rule prose-h2:pb-1 prose-table:text-sm prose-thead:border-rule prose-th:text-ink prose-td:border-rule">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{result.summary_markdown}</ReactMarkdown>
             </Card>
 
             <div>
               <SectionHeading count={result.key_terms.length}>Key terms</SectionHeading>
-              <ul className="flex flex-col gap-2">
+              <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
                 {result.key_terms.map((term, i) => (
                   <li key={i}>
                     <Card className="text-sm text-ink">{term}</Card>

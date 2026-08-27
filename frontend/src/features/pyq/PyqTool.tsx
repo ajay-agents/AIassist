@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ApiError, analyzePyqs } from "../../api/client";
 import type { LlmMeta, PyqResponse } from "../../api/types";
 import { PdfUpload } from "../../components/PdfUpload";
@@ -11,6 +11,7 @@ import {
   FrequencyBar,
   LlmMetaLine,
   PrimaryButton,
+  SecondaryButton,
   SectionHeading,
   StatRow,
   StatTile,
@@ -18,6 +19,10 @@ import {
   TextField,
   WarningBanner,
 } from "../../components/ui/Primitives";
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
+}
 
 interface PyqToolProps {
   apiBaseUrl: string;
@@ -32,6 +37,7 @@ export function PyqTool({ apiBaseUrl }: PyqToolProps) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PyqResponse | null>(null);
   const [llm, setLlm] = useState<LlmMeta | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   async function handleSubmit() {
     setWarning(null);
@@ -40,20 +46,29 @@ export function PyqTool({ apiBaseUrl }: PyqToolProps) {
       setWarning("Paste at least one question first, or upload a PDF above.");
       return;
     }
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     try {
-      const { data, llm } = await analyzePyqs(apiBaseUrl, {
-        subject,
-        grade_level: gradeLevel,
-        questions_text: questionsText,
-      });
+      const { data, llm } = await analyzePyqs(
+        apiBaseUrl,
+        { subject, grade_level: gradeLevel, questions_text: questionsText },
+        controller.signal,
+      );
       setResult(data);
       setLlm(llm);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong.");
+      if (!isAbortError(err)) {
+        setError(err instanceof ApiError ? err.message : "Something went wrong.");
+      }
     } finally {
       setLoading(false);
+      abortRef.current = null;
     }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
   }
 
   return (
@@ -68,7 +83,8 @@ export function PyqTool({ apiBaseUrl }: PyqToolProps) {
           </div>
 
           <PdfUpload
-            label="Upload a PDF of past questions"
+            label="Upload PDFs of past questions"
+            multiple
             onExtracted={(text) => setQuestionsText((prev) => (prev.trim() ? `${prev}\n\n${text}` : text))}
           />
 
@@ -80,9 +96,12 @@ export function PyqTool({ apiBaseUrl }: PyqToolProps) {
           />
         </Card>
 
-        <PrimaryButton onClick={handleSubmit} disabled={loading} loading={loading}>
-          {loading ? "Analyzing…" : "Analyze"}
-        </PrimaryButton>
+        <div className="flex gap-2">
+          <PrimaryButton onClick={handleSubmit} disabled={loading} loading={loading}>
+            {loading ? "Analyzing…" : "Analyze"}
+          </PrimaryButton>
+          {loading && <SecondaryButton onClick={handleStop}>Stop</SecondaryButton>}
+        </div>
 
         {warning && <WarningBanner message={warning} />}
         {error && <ErrorBanner message={error} />}
