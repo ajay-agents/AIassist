@@ -1,4 +1,4 @@
-fastapi==0.115.0
+fastapi>=0.115.2
 uvicorn[standard]==0.32.0
 google-genai==2.20.0
 groq==1.7.0
@@ -7,3 +7,4 @@ python-dotenv==1.0.1
 tenacity==9.0.0
 pytest==8.3.3
 httpx==0.28.1
+starlette>=0.40.0,<1.0

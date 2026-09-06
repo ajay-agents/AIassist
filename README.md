@@ -60,7 +60,7 @@ see [Running the Streamlit test console](#running-the-streamlit-test-console).
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Frontend | React + Vite + TypeScript + Tailwind (`frontend/`) | Polished UI for the three tools; PDF upload, talks to the backend only |
+| Frontend | React + Vite + Tailwind (`frontend/`) | Polished UI for the three tools; PDF upload, talks to the backend only |
 | Test console | Streamlit (`streamlit_app/`) | Lighter-weight manual harness, alternative to the React app |
 | Backend | FastAPI (`backend/`) | Validation, orchestration, deterministic computation |
 | LLM layer | Gemini API (`google-genai`), Groq as fallback | Content understanding, classification, generation |
@@ -120,22 +120,24 @@ requirements.txt
 .env.example
 frontend/
   src/
-    App.tsx                       Tab shell: API base URL config, health check, the 3 tools
-    api/
-      types.ts                      TypeScript mirror of backend/app/schemas.py
-      client.ts                      fetch wrapper: typed errors, X-LLM-* header parsing
+    App.jsx                        Tab shell: header, tab nav, the 3 tools
     lib/
-      pdfText.ts                     Client-side PDF extraction (pdfjs-dist) — lazy-loaded
-      pdfExtractionError.ts           Error class, split out so importing it doesn't pull in pdfjs-dist
+      api.js                         fetch wrapper: request/response mapping, typed errors, X-LLM-* header parsing
+      pdfText.js                     Client-side PDF extraction (pdfjs-dist) — lazy-loaded
+      pdfExtractionError.js           Error class, split out so importing it doesn't pull in pdfjs-dist
+      ocr.js                          Tesseract.js fallback for scanned/image-only PDF pages
+      theme.jsx                       Light/dark theme context, persisted to localStorage
     components/
-      PdfUpload.tsx                   Reusable "or upload a PDF" control, used by all 3 tools
-      ui/Primitives.tsx                Shared Tailwind building blocks (Card, Chip, FrequencyBar, ...)
+      layout/AppHeader.jsx             API base URL config + health check + theme toggle
+      ui/                               shadcn-style primitives (button, input, select, ...)
+      ui-kit/PdfUpload.jsx               Reusable "or upload a PDF" control, used by all 3 tools
+      ui-kit/ResultCard.jsx, Banner.jsx, StatusBadges.jsx, ...  Shared result/status building blocks
     hooks/
-      useApiBaseUrl.ts                 localStorage-persisted API base URL
+      useApiBaseUrl.js                 localStorage-persisted API base URL
     features/
-      studyPlan/StudyPlanTool.tsx       Subjects form + collapsible day-by-day roadmap
-      pyq/PyqTool.tsx                    Questions form + frequency bars/chips/insight
-      notes/NotesTool.tsx                Notes form + rendered markdown summary + glossary
+      studyPlan/StudyPlanTab.jsx        Subjects form + collapsible day-by-day roadmap
+      pyq/PyqTab.jsx                      Questions form + frequency bars/chips/insight
+      notes/NotesTab.jsx                  Notes form + rendered markdown summary + glossary
   package.json
   .env.example                    VITE_API_BASE_URL
 streamlit_app/
